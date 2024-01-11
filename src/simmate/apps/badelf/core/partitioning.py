@@ -34,7 +34,6 @@ class PartitioningToolkit:
         self,
         site_voxel_coord: ArrayLike | list,
         neigh_voxel_coord: ArrayLike | list,
-        # method: str = "linear",
         method: str = "linear",
     ):
         """
@@ -104,7 +103,11 @@ class PartitioningToolkit:
         # values = savgol_filter(values, 20, 3)
         return line, values
 
-    def get_partitioning_line_from_indices(self, i: int, j: int):
+    def get_partitioning_line_from_indices(
+            self, 
+            i: int, 
+            j: int, 
+            method: str = "linear"):
         """
         Gets the voxel positions and elf values for points between two sites in
         the structure.
@@ -121,11 +124,14 @@ class PartitioningToolkit:
         site_voxel_coord = grid.get_voxel_coords_from_index(i)
         neigh_voxel_coord = grid.get_voxel_coords_from_index(j)
         return self.get_partitioning_line_from_voxels(
-            site_voxel_coord, neigh_voxel_coord
+            site_voxel_coord, neigh_voxel_coord, method
         )
 
     def get_partitioning_line_from_cart_coords(
-        self, site_cart_coords, neigh_cart_coords
+        self, 
+        site_cart_coords: ArrayLike | list, 
+        neigh_cart_coords: ArrayLike | list,
+        method: str = "linear",
     ):
         """
         Gets the voxel positions and elf values for points between two sites in
@@ -145,7 +151,34 @@ class PartitioningToolkit:
         site_voxel_coord = grid.get_voxel_coords_from_cart(site_cart_coords)
         neigh_voxel_coord = grid.get_voxel_coords_from_cart(neigh_cart_coords)
         return self.get_partitioning_line_from_voxels(
-            site_voxel_coord, neigh_voxel_coord
+            site_voxel_coord, neigh_voxel_coord, method
+        )
+    
+    def get_partitioning_line_from_frac_coords(
+        self, 
+        site_frac_coords: ArrayLike | list, 
+        neigh_frac_coords: ArrayLike | list,
+        method: str = "linear",
+    ):
+        """
+        Gets the voxel positions and elf values for points between two sites in
+        the structure given as fractional coordinates. This method can also be
+        used to find the values in the ELF between two arbitrary points in the
+        structure.
+
+        Parameters:
+        - site_frac_coords: fractional coordinates of a site in the structure
+        - neigh_frac_coords: fractional coordinates of a second site in the structure
+
+        Returns:
+        - Two lists, one of positions in voxel coordinates and another of elf
+        values
+        """
+        grid = self.grid.copy()
+        site_voxel_coord = grid.get_voxel_coords_from_frac(site_frac_coords)
+        neigh_voxel_coord = grid.get_voxel_coords_from_frac(neigh_frac_coords)
+        return self.get_partitioning_line_from_voxels(
+            site_voxel_coord, neigh_voxel_coord, method
         )
 
     @staticmethod
