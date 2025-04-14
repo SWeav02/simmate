@@ -405,16 +405,6 @@ class ElfAnalyzerToolkit:
         be caught by this.
         """
         atom_values = []
-        # for atom_idx, atom_sphere_coords in enumerate(self.site_sphere_voxel_coords):
-        #     atom_sphere_in_feature = np.where(
-        #         volume_mask[
-        #             atom_sphere_coords[:, 0],
-        #             atom_sphere_coords[:, 1],
-        #             atom_sphere_coords[:, 2],
-        #         ]
-        #     )[0]
-        #     if len(atom_sphere_in_feature) > 0:
-        #         atom_values.append(atom_idx)
         for atom_idx, atom_coords in enumerate(self.site_voxel_coords):
             site_value = volume_mask[atom_coords[0], atom_coords[1], atom_coords[2]]
             if site_value:
@@ -500,14 +490,9 @@ class ElfAnalyzerToolkit:
                 types.append(0)
             else:
                 types.append(1)
-        # if not inf_feature:
         if return_type:
             return surrounded_sites, types
         return surrounded_sites
-        # else:
-        #     if return_type:
-        #         return np.insert(surrounded_sites, 0, -1), types
-        #     return np.insert(surrounded_sites, 0, -1)
 
     def check_if_infinite_feature(self, mask: NDArray) -> bool:
         """
@@ -722,8 +707,6 @@ class ElfAnalyzerToolkit:
                     nearest_atom = bader.bader_atoms[basins][
                         np.where(distances == distance)[0][0]
                     ]
-                    # if nearest_atom == 0:
-                    #     breakpoint()
 
                     # Now we update this node with the information we gathered
                     networkx.set_node_attributes(
@@ -783,7 +766,7 @@ class ElfAnalyzerToolkit:
                     # record how many features it split into, the basins that
                     # are in this feature, and if there are any atoms contained
                     # in it. This info may be used later to categorize basin.
-                    # basins = np.unique(basin_labeled_voxels[mask])
+
                     # Our current mask is the last point where this feature was
                     # distinct, but we want the point where it had the lowest
                     # ELF value while being distinct. This allows us to see if
@@ -806,8 +789,6 @@ class ElfAnalyzerToolkit:
                         # by wrapping around the cell. In a larger cell, the
                         # split would be noted, but it's not for these.
                         is_infinite = self.check_if_infinite_feature(high_elf_mask)
-                        # if len(atoms) == 3:
-                        #     breakpoint()
                     else:
                         # if we have no parent this is our first node and
                         # we have as many atoms as there are in the structure
@@ -826,14 +807,6 @@ class ElfAnalyzerToolkit:
                     atom_num = len(atoms)
                     if is_infinite:
                         atom_num = -1
-                    # if len(atoms) > 0:
-                    #     if atoms[0] == -1:
-                    #         atom_num = -1
-                    #         atoms = atoms[1:]
-
-                    # else:
-                    #     atom_num = len(atoms)
-
                     networkx.set_node_attributes(
                         graph,
                         {
@@ -911,7 +884,6 @@ class ElfAnalyzerToolkit:
             min_covalent_angle=min_covalent_angle,
             min_covalent_bond_ratio=min_covalent_bond_ratio,
         )
-        # breakpoint()
         graph = self._correct_for_high_depth_shells(graph)
 
         # Reduce any related shell basins to a single basin
@@ -948,7 +920,6 @@ class ElfAnalyzerToolkit:
                         },
                     )
                 except:
-                    # breakpoint()
                     raise Exception(
                         "At least one ELF feature was not assigned. This is a bug. Please report to our github:"
                         "https://github.com/jacksund/simmate/issues"
@@ -1023,7 +994,6 @@ class ElfAnalyzerToolkit:
             # TODO: It may be that this loop should just be for when the number
             # of atoms is infinite. Basically, any finite number suggests a
             # molecular feature and all basins would be core/shell/covalent/lone-pair.
-            # elif num_atoms > 1 or num_atoms == -1:# and remaining_atoms > 0:
             elif num_atoms == -1:
                 for child_idx, child in graph.child_dicts(i).items():
                     # skip any nodes that are reducible
@@ -1120,11 +1090,6 @@ class ElfAnalyzerToolkit:
                                 low_elf_mask, return_type=True
                             )
                         )
-                        # If the volume surrounds infinite atoms, the first atom
-                        # returned will be a -1. We check for this
-                        # if len(atoms_in_basin) > 0:
-                        #     if atoms_in_basin[0] == -1:
-                        #         atoms_in_basin = atoms_in_basin[1:]
 
                         if len(atoms_in_basin) > 0:
                             # We have an core/shell region
@@ -1182,7 +1147,6 @@ class ElfAnalyzerToolkit:
                     # skip reducible domains
                     if "split" in child.keys():
                         continue
-                    # breakpoint()
                     networkx.set_node_attributes(
                         graph,
                         {child_idx: {"type": "atom", "subtype": "shell"}},
@@ -1360,7 +1324,6 @@ class ElfAnalyzerToolkit:
         are obviously metallic or covalent
         """
         valence_summary = self.get_valence_summary(graph)
-        # breakpoint()
         # TODO: Many of these features could be symmetric. I should only perform
         # each action for one of these symmetric features and assign the result
         # to all of them.
@@ -1437,7 +1400,6 @@ class ElfAnalyzerToolkit:
             # as such
             if covalent:
                 subtype = "covalent"
-                # breakpoint()
             # We also noted in our atomic assignment which features were part
             # of the atomic branch, but weren't shells or cores. The remaining
             # options were covalent or lone-pairs and we've just assigned the
@@ -1458,7 +1420,6 @@ class ElfAnalyzerToolkit:
                 and previous_subtype != "other"
                 and not covalent
             ):
-                # breakpoint()
                 subtype = "metallic"
                 # set subtype
                 networkx.set_node_attributes(graph, {feature_idx: {"subtype": subtype}})
@@ -1726,7 +1687,6 @@ class ElfAnalyzerToolkit:
             # connections
             nodes_to_remove.append(children[0])
 
-        # breakpoint()
         # now remove each child
         nodes_to_remove.reverse()
         for child_idx in nodes_to_remove:
@@ -1824,10 +1784,7 @@ class ElfAnalyzerToolkit:
             labels.append(label)
             parent = graph.parent_dict(i)
             if parent is not None:
-                try:
-                    Xn.append(parent["split"])
-                except:
-                    breakpoint()
+                Xn.append(parent["split"])
 
             else:
                 Xn.append(0)
