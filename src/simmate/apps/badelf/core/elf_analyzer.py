@@ -262,7 +262,7 @@ class ElfAnalyzerToolkit:
         Gets the coordination environment for the atoms in the system
         using CrystalNN
         """
-        cnn = CrystalNN()
+        cnn = CrystalNN(distance_cutoffs=None)
         neighbors = cnn.get_all_nn_info(self.structure)
         return neighbors
 
@@ -298,7 +298,7 @@ class ElfAnalyzerToolkit:
             cleaned_structure.replace_species({"E": "He"})
         # for each index, we append a dummy atom ("He" because its relatively small)
         # then get the nearest neighbors
-        cnn = CrystalNN()
+        cnn = CrystalNN(distance_cutoffs=None)
         all_neighbors = []
         for idx in shared_feature_indices:
             neigh_indices = []
@@ -1699,7 +1699,7 @@ class ElfAnalyzerToolkit:
             frac_coords = attributes["frac_coords"]
             temp_structure = self.structure.copy()
             temp_structure.append("H-", frac_coords)
-            cnn = CrystalNN()
+            cnn = CrystalNN(distance_cutoffs=None)
             coordination = cnn.get_nn_info(temp_structure, -1)
             coord_num = len(coordination)
             coord_indices = [i["site_index"] for i in coordination]
