@@ -609,20 +609,6 @@ class ElfAnalyzerToolkit:
         # keep track of the total number of labels we've had throughout the
         # process. We use this to keep track of previous nodes
         total_features = 1
-        # We want to get a guess for where bifurcations are going to happen.
-        # According to Lepetit et. al. (http://dx.doi.org/10.1016/j.ccr.2017.04.009)
-        # these occur at critical points where the sum of non-zero signs of the
-        # hessian matrix eigenvalues is -1. We also want the maxima which have
-        # a sign sum of -3.
-        critical_coords, elf_values, sign_sum = elf_grid.get_critical_points(elf_data)
-        # find where the sign_sum is -1
-        # bif_indices = np.where((sign_sum==-1) | (sign_sum==-3))[0]
-        # bif_elf_values = np.round(elf_values[bif_indices], resolution)
-        # unique_elf_values = np.unique(bif_elf_values)
-        # # unique_elf_values = np.insert(unique_elf_values, 0, 0) + (10**-resolution)
-        # unique_elf_values = unique_elf_values + (10**-resolution)
-        important_elf_values = []
-        resolution = 0.01
         for i in range(round(1 / resolution)):
             # for cutoff in unique_elf_values:
             cutoff = resolution * (i + 1)
@@ -652,6 +638,7 @@ class ElfAnalyzerToolkit:
             new_len = len(unique_new_labels)
             featured_grid -= new_len
             unique_new_labels -= new_len
+
             # Prior to decreasing our values, 0 referred to areas with no feature.
             # We don't want to consider these regions so we remove them from
             # our unique lists
@@ -678,7 +665,6 @@ class ElfAnalyzerToolkit:
                 if -new_len in features_list:
                     features_list = features_list[1:]
                 if len(features_list) == 0:
-                    important_elf_values.append(cutoff)
                     # This feature was irreducible and just disappeared.
                     # We want to assign the feature to be atomic or valent and
                     # then store information that might be relavent to the type
@@ -699,7 +685,6 @@ class ElfAnalyzerToolkit:
                     # Now we get the basins that belong to this feature.
                     # NOTE: there may be more than one if the depth of the basin is
                     # smaller than the resolution
-                    # basins = np.unique(basin_labeled_voxels[mask])
                     basins = graph.nodes[feature]["basins"]
                     # Using this, we can find the average frac coords of the attractors
                     # in this basin
@@ -793,7 +778,6 @@ class ElfAnalyzerToolkit:
                             featured_grid == features_list[0], feature, featured_grid
                         )
                 elif len(features_list) > 1:
-                    important_elf_values.append(cutoff)
                     # This feature has split and we want to add an attribute
                     # labeling it with the value it split at. We also want to
                     # record how many features it split into, the basins that
