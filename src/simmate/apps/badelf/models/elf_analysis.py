@@ -1,16 +1,4 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Created on Thu Apr 17 08:55:13 2025
-
-@author: sweav
-"""
-
-# TODO:
-    # Create workflow for running elf analysis and returning desired info
-    # Create model for storing each structure connected to model for each non-atomic feature
-    # Rework BadELF workflow to use this database first
-    # Create workflow for filtering MP database
 
 from pathlib import Path
 
@@ -194,6 +182,9 @@ class ElfAnalysis(Structure, Calculation):
                 dist_minus_radius = feature.get("dist_minus_radius", None),
                 bare_electron_indicator = feature.get("bare_electron_indicator", None),
                 bare_electron_scores = feature.get("bare_electron_scores", None),
+                coord_number = feature.get("coord_num"),
+                coord_atom_indices = feature.get("coord_indices"),
+                coord_atom_types = feature.get("coord_atoms"),
                 elf_analysis = self, # links to elf analysis calc
             )
             new_row.save()
@@ -335,4 +326,18 @@ class ElfFeatures(DatabaseTable):
     Each one is compared to an ideal value
     """
     
+    coord_number = table_column.IntegerField(blank=True, null=True)
+    """
+    The coordination number of this feature
+    """
+    
+    coord_atom_indices = table_column.JSONField(blank=True, null=True)
+    """
+    The structure indices of each of the coordinated atoms
+    """
+    
+    coord_atom_types = table_column.JSONField(blank=True, null=True)
+    """
+    The symbol of each of the coordinated atoms
+    """
     

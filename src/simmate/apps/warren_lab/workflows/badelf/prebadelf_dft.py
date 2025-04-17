@@ -5,6 +5,7 @@ from simmate.apps.warren_lab.workflows.static_energy.hse import (
 from simmate.apps.warren_lab.workflows.static_energy.pbesol import (
     StaticEnergy__Vasp__WarrenLabPbesol,
 )
+from simmate.apps.vasp.inputs.potcar_mappings import PBE_GW_POTCAR_MAPPINGS_HIGH_VALENCE
 
 # The key thing for bader analysis is that we need a very fine FFT mesh. Other
 # than that, it's the same as a static energy calculation.
@@ -31,6 +32,9 @@ class StaticEnergy__Vasp__WarrenLabPrebadelfPbesol(StaticEnergy__Vasp__WarrenLab
     use the full workflow, which runs this calculation AND the following bader
     analysis for you. This S3Task is only the first step of that workflow.
     """
+    functional = "PBE_GW"
+    
+    potcar_mappings = PBE_GW_POTCAR_MAPPINGS_HIGH_VALENCE # PPS with more valence electrons
 
     _incar_updates = PREBADELF_INCAR_SETTINGS
 
@@ -45,5 +49,8 @@ class StaticEnergy__Vasp__WarrenLabPrebadelfHse(StaticEnergy__Vasp__WarrenLabHse
     use the full workflow, which runs this calculation AND the following bader
     analysis for you. This S3Task is only the first step of that workflow.
     """
-
+    functional = "PBE_GW"
+    
+    potcar_mappings = PBE_GW_POTCAR_MAPPINGS_HIGH_VALENCE # PPS with more valence electrons
+    
     _incar_updates = PREBADELF_INCAR_SETTINGS
