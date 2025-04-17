@@ -747,6 +747,7 @@ class ElfAnalyzerToolkit:
                                 "volume": volume,
                                 "atom_distance": distance,
                                 "nearest_atom": nearest_atom,
+                                "nearest_atom_type": self.structure[nearest_atom].specie.symbol,
                                 "frac_coords": frac_coord,
                             }
                         },
@@ -1199,6 +1200,7 @@ class ElfAnalyzerToolkit:
         charge = 0
         max_elf = 0
         nearest_atom = -1
+        nearest_atom_type = None
         subset = 0
         frac_coords = None
         depth = 0
@@ -1207,6 +1209,7 @@ class ElfAnalyzerToolkit:
         for child_idx in nodes:
             child = graph.nodes[child_idx]
             nearest_atom = child["nearest_atom"]
+            nearest_atom_type = child["nearest_atom_type"]
             basins.extend(child["basins"])
             atom_distance = min(atom_distance, child["atom_distance"])
             volume += child["volume"]
@@ -1233,6 +1236,7 @@ class ElfAnalyzerToolkit:
                     "charge": round(charge, 2),
                     "max_elf": round(max_elf, 2),
                     "nearest_atom": nearest_atom,
+                    "nearest_atom_type": nearest_atom_type,
                     "depth": round(depth, 2),
                     "3d_depth": depth_3d,
                     "frac_coords": frac_coords,
@@ -1331,6 +1335,7 @@ class ElfAnalyzerToolkit:
                             "charge": child_dict["charge"],
                             "max_elf": child_dict["max_elf"],
                             "nearest_atom": child_dict["nearest_atom"],
+                            "nearest_atom_type": child_dict["nearest_atom_type"],
                             "depth": round(depth, 2),
                             "3d_depth": child_dict["3d_depth"],
                             "frac_coords": child_dict["frac_coords"],
@@ -1805,7 +1810,7 @@ class ElfAnalyzerToolkit:
                     Xn1.append(node["max_elf"] - node["depth"] + 0.01)
                 end_indices.append(i)
                 # Get label
-                label = f"""type: {node["subtype"]}\ndepth: {node["depth"]}\ndepth to inf connection: {node["3d_depth"]}\nmax elf: {node["max_elf"]}\ncharge: {node["charge"]}\nvolume: {node["volume"]}\natom distance: {round(node["atom_distance"],2)}\nnearest atom index: {node["nearest_atom"]}\nnearest atom type: {self.structure[node["nearest_atom"]].specie.name}"""
+                label = f"""type: {node["subtype"]}\ndepth: {node["depth"]}\ndepth to inf connection: {node["3d_depth"]}\nmax elf: {node["max_elf"]}\ncharge: {node["charge"]}\nvolume: {node["volume"]}\natom distance: {round(node["atom_distance"],2)}\nnearest atom index: {node["nearest_atom"]}\nnearest atom type: {node["nearest_atom_type"]}"""
                 if node.get("bare_electron_indicator", None) is not None:
                     label += f'\ndistance minus atom radius: {round(node["dist_minus_radius"],2)}'
                     label += f"\nBEI array: {node['bare_electron_scores'].round(2)}"
