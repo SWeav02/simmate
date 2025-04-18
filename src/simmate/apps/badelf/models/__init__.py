@@ -1,4 +1,4 @@
 # -*- coding: utf-8 -*-
 
 from .badelf import BadElf, ElfIonicRadii
-from .elf_analysis import ElfAnalysis
+from .elf_analysis import ElfAnalysis, ElfFeatures
