@@ -880,30 +880,6 @@ class ElfAnalyzerToolkit:
         # Now we have a graph with information associated with each basin. We want
         # to label each node.
         graph = self._mark_atomic(graph, bader, elf_grid, shell_depth)
-        # In some cases, the user may not have used a pseudopotential with enough core electrons.
-        # This can result in an atom having no assigned core/shell, which will
-        # result in nonsense later. We check for this here and throw an error
-        assigned_atoms = []
-        for i in graph.nodes:
-            node = graph.nodes[i]
-            # We only want to consider basins that are core or shell, so we check
-            # here and skip otherwise
-            basin_subtype = node.get("subtype", None)
-            if not basin_subtype in ["core", "shell"]:
-                continue
-            atom = node.get("nearest_atom", None)
-            if atom is not None:
-                assigned_atoms.append(atom)
-        if (
-            len(np.unique(assigned_atoms)) != len(self.structure)
-            and not self.ignore_low_pseudopotentials
-        ):
-            # BUG: This exception was flagged for SiO despite there being atom assignments for the full structure
-            raise Exception(
-                "At least one atom was not assigned a zero-flux basin. This typically results"
-                "from pseudo-potentials (PPs) with only valence electrons (e.g. the defaults for Al, Si, B in VASP 5.X.X)."
-                "Try using PPs with more valence electrons such as VASP's GW potentials"
-            )
 
         # Now we want to label our valence features as Covalent, Metallic, or bare electron.
         # Many covalent and metallic features are easy to find. Covalent bonds
@@ -926,7 +902,31 @@ class ElfAnalyzerToolkit:
         graph = self._mark_bare_electron_indicator(
             graph, bader, elf_grid, radius_refine_method=radius_refine_method
         )
-
+        # In some cases, the user may not have used a pseudopotential with enough core electrons.
+        # This can result in an atom having no assigned core/shell, which will
+        # result in nonsense later. We check for this here and throw an error
+        assigned_atoms = []
+        for i in graph.nodes:
+            node = graph.nodes[i]
+            # We only want to consider basins that are core or shell, so we check
+            # here and skip otherwise
+            basin_subtype = node.get("subtype", None)
+            if not basin_subtype in ["core", "shell"]:
+                continue
+            atom = node.get("nearest_atom", None)
+            if atom is not None:
+                assigned_atoms.append(atom)
+        if (
+            len(np.unique(assigned_atoms)) != len(self.structure)
+            and not self.ignore_low_pseudopotentials
+        ):
+            
+            breakpoint()
+            raise Exception(
+                "At least one atom was not assigned a zero-flux basin. This typically results"
+                "from pseudo-potentials (PPs) with only valence electrons (e.g. the defaults for Al, Si, B in VASP 5.X.X)."
+                "Try using PPs with more valence electrons such as VASP's GW potentials"
+            )
         # Finally, we add a label to each node with a summary of information
         # for plotting
         for i in graph.nodes:
