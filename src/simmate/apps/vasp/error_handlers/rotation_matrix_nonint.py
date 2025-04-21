@@ -44,13 +44,11 @@ class RotationNonIntMatrix(ErrorHandler):
             # switch to gamma-centered mesh
             incar["KGAMMA"] = True
             correction = "switched KGAMMA to True"
-            error_counts["brmix"] += 1
 
         # our second attempt turns symmetry off
         elif error_counts["brmix"] == 1:
             incar["ISYM"] = 0
             correction = "switched ISYM to 0"
-            error_counts["brmix"] += 1
 
         # if the two attempts above didn't work, we give up by raising an error
         else:
@@ -62,6 +60,7 @@ class RotationNonIntMatrix(ErrorHandler):
         incar.to_file(incar_filename)
 
         # rewrite the new error count file
+        error_counts["brmix"] += 1
         with error_count_filename.open("w") as file:
             json.dump(error_counts, file)
 

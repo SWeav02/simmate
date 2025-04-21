@@ -307,7 +307,7 @@ def keyword_modifier_smart_nbands(structure: Structure, nbands_config: dict):
         for i in range(len(structure.indices_from_symbol(element))):
             total_nelect += potcar.nelectrons
     
-    return int(total_nelect/2 + len(structure) * 2)
+    return max(int(total_nelect/2 + len(structure) * 2), int(total_nelect*0.6))
         
     
 # TODO: In the future, I want to allow modifiers like __relative_to_previous
