@@ -13,6 +13,7 @@ from simmate.apps.vasp.inputs.incar_modifiers import (
     keyword_modifier_smart_lmaxmix,
     keyword_modifier_smart_magmom,
     keyword_modifier_smart_quad_efg,
+    keyword_modifier_smart_nbands,
 )
 from simmate.toolkit import Structure
 from simmate.utilities import str_to_datatype
@@ -435,5 +436,6 @@ for modifier in [
     keyword_modifier_smart_ldau,
     keyword_modifier_smart_ismear,
     keyword_modifier_smart_quad_efg,
+    keyword_modifier_smart_nbands,
 ]:
     Incar.add_keyword_modifier(modifier)

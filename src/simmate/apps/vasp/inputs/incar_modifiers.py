@@ -3,8 +3,17 @@
 import math
 
 from pymatgen.core import Species
+from pymatgen.io.vasp import PotcarSingle
 
 from simmate.toolkit import Structure
+
+from simmate.apps.vasp.inputs.potcar_mappings import (
+    FOLDER_MAPPINGS,
+    PBE_GW_POTCAR_MAPPINGS,
+    PBE_POTCAR_MAPPINGS,
+)
+
+import warnings
 
 # TODO: consider making modifiers a class. For example:
 #
@@ -260,7 +269,47 @@ def keyword_modifier_smart_quad_efg(structure: Structure, quad_efg_config):
 
     return quad_efg
 
-
+def keyword_modifier_smart_nbands(structure: Structure, nbands_config: dict):
+    """
+    This modifier sets nbands to NELECT/2+2*NIONS if there are any f
+    orbitals in the structure.
+    """
+    # first iterate through all elements and check for f-electrons. If there
+    # are none we use default NBAND and return None
+    if not any(element.Z > 56 for element in structure.composition):
+        return None
+    
+    # get the users potcar mappings
+    functional = nbands_config.get("functional", None)
+    potcar_mappings = nbands_config.get("potcar_mappings", None)
+    if functional is None or potcar_mappings is None:
+        return None
+    
+    # get the potcar folder
+    folder_loc = FOLDER_MAPPINGS[functional]
+    
+    # Iterate over each element in the structure and add the number of electrons
+    # from the POTCAR for each atom
+    total_nelect = 0
+    for element in structure.symbol_set:
+        # Load the potcar
+        potcar_symbol = potcar_mappings[element]
+        # now let's combine this information for the full path to the POTCAR.
+        # The file will be located at /folder_loc/element_symbol/POTCAR
+        potcar_loc = folder_loc / potcar_symbol / "POTCAR"
+        # Pymatgen usually gives a warning because it doesn't recognize our
+        # PPs. We just catch that here to reduce warning spam
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, module="pymatgen"
+            )
+            potcar = PotcarSingle.from_file(potcar_loc)
+        for i in range(len(structure.indices_from_symbol(element))):
+            total_nelect += potcar.nelectrons
+    
+    return int(total_nelect/2 + len(structure) * 2)
+        
+    
 # TODO: In the future, I want to allow modifiers like __relative_to_previous
 # and __use_previous to string settings accross tasks.
 

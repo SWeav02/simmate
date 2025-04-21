@@ -921,7 +921,6 @@ class ElfAnalyzerToolkit:
             and not self.ignore_low_pseudopotentials
         ):
             
-            breakpoint()
             raise Exception(
                 "At least one atom was not assigned a zero-flux basin. This typically results"
                 "from pseudo-potentials (PPs) with only valence electrons (e.g. the defaults for Al, Si, B in VASP 5.X.X)."
