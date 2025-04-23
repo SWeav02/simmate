@@ -1010,7 +1010,10 @@ class DatabaseTable(models.Model):
 
         # Now we have all data loaded and attached to the database entry, we
         # can call save() to actually update the database
-        self.save()
+        try:
+            self.save()
+        except:
+            breakpoint()
 
     def update_from_toolkit(self, **fields_to_update):
         """

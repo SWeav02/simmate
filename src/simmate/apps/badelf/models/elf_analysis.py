@@ -50,6 +50,13 @@ class ElfAnalysis(Structure, Calculation):
     ELF domain extending infinitely
     """
     
+    metal_charge_cutoff = table_column.FloatField(blank=True, null=True)
+    """
+    The charge under which a non-atomic feature is considered to be a
+    metallic feature. This prevents features along atom bonds with low
+    charges from being classified as covalent.
+    """
+    
     min_covalent_angle = table_column.FloatField(blank=True, null=True)
     """
     The minimum angle between neighboring atoms and a non-atomic feature
@@ -179,7 +186,7 @@ class ElfAnalysis(Structure, Calculation):
                 nearest_atom = feature.get("nearest_atom", None),
                 nearest_atom_type = feature.get("nearest_atom_type", None),
                 atom_distance = feature.get("atom_distance", None),
-                dist_minus_radius = feature.get("dist_minus_radius", None),
+                feature_radius = feature.get("feature_radius", None),
                 bare_electron_indicator = feature.get("bare_electron_indicator", None),
                 bare_electron_scores = feature.get("bare_electron_scores", None),
                 coord_number = feature.get("coord_num"),
@@ -305,10 +312,11 @@ class ElfFeatures(DatabaseTable):
     # Columns only filled out for valence features
     ###########################################################################
     
-    dist_minus_radius = table_column.FloatField(blank=True, null=True)
+    feature_radius = table_column.FloatField(blank=True, null=True)
     """
-    The distance from this feature to the nearest atom minus that atoms
-    radius determined from the ELF
+    The distance from this feature to the neighboring atom minus that atoms
+    radius determined from the ELF. Uses the smallest radius from all
+    neighbors
     """
     
     bare_electron_indicator = table_column.FloatField(blank=True, null=True)

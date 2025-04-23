@@ -41,6 +41,7 @@ class BadElfBase(Workflow):
             include_lone_pairs=False,
             include_shared_features=True,
             metal_depth_cutoff=0.1,
+            metal_charge_cutoff=0.2,
             min_covalent_angle=135,
             min_covalent_bond_ratio=0.4,
             shell_depth=0.05,
@@ -131,6 +132,7 @@ class ElfAnalysisBase(Workflow):
         include_lone_pairs=False,
         include_shared_features=True,
         metal_depth_cutoff=0.1,
+        metal_charge_cutoff=0.2,
         min_covalent_angle=135,
         min_covalent_bond_ratio=0.4,
         shell_depth=0.05,
@@ -166,6 +168,7 @@ class ElfAnalysisBase(Workflow):
             include_lone_pairs=include_lone_pairs,
             include_shared_features=include_shared_features,
             metal_depth_cutoff=metal_depth_cutoff,
+            metal_charge_cutoff=metal_charge_cutoff,
             min_covalent_angle=min_covalent_angle,
             min_covalent_bond_ratio=min_covalent_bond_ratio,
             shell_depth=shell_depth,
@@ -187,6 +190,7 @@ class ElfAnalysisBase(Workflow):
         results["downscale_resolution"] = downscale_resolution
         results["resolution"] = resolution
         results["metal_depth_cutoff"] = metal_depth_cutoff
+        results["metal_charge_cutoff"] = metal_charge_cutoff
         results["min_covalent_angle"] = min_covalent_angle
         results["min_covalent_bond_ratio"] = min_covalent_bond_ratio
         results["shell_depth"] = shell_depth

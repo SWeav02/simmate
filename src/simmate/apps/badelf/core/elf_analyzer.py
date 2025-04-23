@@ -587,6 +587,7 @@ class ElfAnalyzerToolkit:
         resolution: float = 0.01,
         shell_depth: float = 0.05,
         metal_depth_cutoff: float = 0.1,
+        metal_charge_cutoff: float = 0.2,
         min_covalent_angle: float = 135,
         min_covalent_bond_ratio: float = 0.4,
         radius_refine_method: str = "linear",
@@ -711,9 +712,22 @@ class ElfAnalyzerToolkit:
                         if len(empty_structure) > 1:
                             empty_structure.merge_sites(tol=1, mode="average")
                         frac_coord = empty_structure.frac_coords[0]
-                    frac_coord = unscaled_elf_grid.get_maxima_near_frac_coord(
-                        frac_coord
+                    refined_frac_coord = unscaled_elf_grid.get_maxima_near_frac_coord(
+                        frac_coord,
+                        neighbor_size=2
                     )
+                    # Check that we haven't moved very far from our starting point.
+                    # If we have, we try reducing the neighbor size
+                    # NOTE: Would it be better to use voxel coords or cart coords?
+                    if math.dist(frac_coord, refined_frac_coord) > 0.1:
+                        refined_frac_coord = unscaled_elf_grid.get_maxima_near_frac_coord(
+                            frac_coord,
+                            neighbor_size=1
+                        )
+                    # Again check that we haven't moved too far from our starting point.
+                    # If we haven't, we override our frac coord with the refined one
+                    if not math.dist(frac_coord, refined_frac_coord) > 0.01:
+                        frac_coord = refined_frac_coord
 
                     # Using these basins, we create a mask representing the full
                     # basin (not just above this elf value) and integrate the
@@ -889,9 +903,11 @@ class ElfAnalyzerToolkit:
             bader,
             graph,
             metal_depth_cutoff=metal_depth_cutoff,
+            metal_charge_cutoff=metal_charge_cutoff,
             min_covalent_angle=min_covalent_angle,
             min_covalent_bond_ratio=min_covalent_bond_ratio,
         )
+        
         graph = self._correct_for_high_depth_shells(graph)
 
         # Reduce any related shell basins to a single basin
@@ -902,6 +918,9 @@ class ElfAnalyzerToolkit:
         graph = self._mark_bare_electron_indicator(
             graph, bader, elf_grid, radius_refine_method=radius_refine_method
         )
+        
+        graph = self._correct_far_covalent_features(graph)
+        
         # In some cases, the user may not have used a pseudopotential with enough core electrons.
         # This can result in an atom having no assigned core/shell, which will
         # result in nonsense later. We check for this here and throw an error
@@ -1352,6 +1371,7 @@ class ElfAnalyzerToolkit:
         bader,
         graph: BifurcationGraph(),
         metal_depth_cutoff: float = 0.1,
+        metal_charge_cutoff: float = 0.2,
         min_covalent_angle: float = 135,
         min_covalent_bond_ratio: float = 0.4,
     ) -> BifurcationGraph():
@@ -1368,10 +1388,19 @@ class ElfAnalyzerToolkit:
             # Default to bare electron
             basin_type = "val"
             subtype = "bare electron"
+            
+            # First check for metallic character.
+            if (
+                attributes["3d_depth"] < metal_depth_cutoff
+                and attributes["charge"] < metal_charge_cutoff
+                and previous_subtype != "other"
+            ):
+                subtype = "metallic"
+                # set subtype
+                networkx.set_node_attributes(graph, {feature_idx: {"subtype": subtype}})
+                continue
 
-            # First check for covalent character. We do this before the metallic
-            # character cutoff because some covalent bonds in molecular solids
-            # have very low depths
+            # Next check for covalent character. 
             # We create a temporary structure to calculate distances to neighboring
             # atoms. This is just to utilize pymatgen's distance method which
             # takes periodic boundaries into account.
@@ -1447,19 +1476,6 @@ class ElfAnalyzerToolkit:
                 # be bare electrons (e.g. Sr6CrN6) if the basin doesn't bifurcate
                 # before the atomic basins. This could potentially be corrected
                 # for with a distance cutoff.
-
-            # Now check for metallic character. Note we make
-            # sure this feature isn't already assigned as covalent to avoid relabeling
-            # features that have already been found
-            if (
-                attributes["3d_depth"] < metal_depth_cutoff
-                and previous_subtype != "other"
-                and not covalent
-            ):
-                subtype = "metallic"
-                # set subtype
-                networkx.set_node_attributes(graph, {feature_idx: {"subtype": subtype}})
-                continue
 
             # We've now checked for metallic character, covalent bonds and most
             # lone-pairs. We update our subtype accordingly
@@ -1625,9 +1641,35 @@ class ElfAnalyzerToolkit:
             # difficult question. We use CrystalNN to get the neighbors around
             # the nearest atom and get the EN difference. We use this to guess
             # whether covalent or ionic radii should be used, then pull the appropriate one.
-            atom_idx = attributes["nearest_atom"]
-            atom_radius = radii[atom_idx]
-            dist = attributes["atom_distance"]
+            # First, we also want to get the coordination environment of this
+            # feature, even though this doesnt feed into our BEI.
+            frac_coords = attributes["frac_coords"]
+            temp_structure = self.structure.copy()
+            temp_structure.append("H-", frac_coords)
+            cnn = CrystalNN(distance_cutoffs=None)
+            coordination = cnn.get_nn_info(temp_structure, -1)
+            coord_num = len(coordination)
+            coord_indices = [i["site_index"] for i in coordination]
+            coord_atoms = [temp_structure[i].specie.symbol for i in coord_indices]
+            # Now that we have the nearby atoms, we want to get the smallest radius
+            # of this basin
+            atom_indices = np.unique(coord_indices)
+            atom_radius = 10
+            atom_distance = 10
+            dist_minus_radius = 10
+            nearest_atom_idx = -1
+            nearest_atom_species = None
+            for atom_idx in atom_indices:
+                atom_radius_new = radii[atom_idx]
+                dist = temp_structure.get_distance(atom_idx, -1)
+                dist_minus_radius_new = dist-atom_radius_new
+                if dist_minus_radius_new < dist_minus_radius:
+                    dist_minus_radius = dist_minus_radius_new
+                    atom_radius = atom_radius_new
+                    atom_distance = dist
+                    nearest_atom_idx = atom_idx
+                    nearest_atom_species = temp_structure[atom_idx].specie.symbol
+                    
             # Now that we have a radius, we need to get a metric of 0-1. We need
             # to set an ideal distance corresponding to 1 and a minimum distance
             # corresponding to 0. The ideal distance is the sum of the atoms radius
@@ -1640,7 +1682,6 @@ class ElfAnalyzerToolkit:
             dist_contribution = (dist - min_dist) / (max_dist - min_dist)
             # limit to a range of 0 to 1
             dist_contribution = min(max(dist_contribution, 0), 1)
-            dist_minus_radius = dist - atom_radius
 
             # We want to keep track of the full values in a convenient way
             unnormalized_contributors = np.array(
@@ -1675,16 +1716,7 @@ class ElfAnalyzerToolkit:
             )
             bare_electron_indicator = np.sum(contributers * weights)
 
-            # Finally, we also want to get the coordination environment of this
-            # feature, even though this doesnt feed into our BEI.
-            frac_coords = attributes["frac_coords"]
-            temp_structure = self.structure.copy()
-            temp_structure.append("H-", frac_coords)
-            cnn = CrystalNN(distance_cutoffs=None)
-            coordination = cnn.get_nn_info(temp_structure, -1)
-            coord_num = len(coordination)
-            coord_indices = [i["site_index"] for i in coordination]
-            coord_atoms = [temp_structure[i].specie.symbol for i in coord_indices]
+            
             # we update our node to include this information
             networkx.set_node_attributes(
                 graph,
@@ -1693,14 +1725,32 @@ class ElfAnalyzerToolkit:
                         "unnormalized_bare_electron_indicator": unnormalized_contributors,
                         "bare_electron_indicator": bare_electron_indicator,
                         "bare_electron_scores": contributers,
-                        "dist_minus_radius": dist_minus_radius,
+                        "feature_radius": dist_minus_radius,
                         "coord_num": coord_num,
                         "coord_indices": coord_indices,
                         "coord_atoms": coord_atoms,
+                        "atom_distance": atom_distance,
+                        "nearest_atom": nearest_atom_idx,
+                        "nearest_atom_type": nearest_atom_species,
                     }
                 },
             )
+            
         return graph
+    
+    def _correct_far_covalent_features(self, graph: BifurcationGraph()) -> BifurcationGraph():
+        # BUG-FIX On occasion, a metal feature will sit very close to being along
+        # an atom-atom bond, but will sit well outside that atoms ELF radius. In
+        # these cases they will be mislabeled as covalent. We correct for that here
+        valence_summary = self.get_valence_summary(graph)
+        for feature_idx, attributes in valence_summary.items():
+            feature_radius = attributes["feature_radius"]
+            feature_subtype = attributes["subtype"]
+            if feature_radius > 0.2 and feature_subtype in ["covalent", "lone-pair"]:
+                networkx.set_node_attributes(graph,{feature_idx: {"subtype": "bare electron"}},)
+            
+        return graph
+            
 
     def _clean_reducible_nodes(self, graph: BifurcationGraph()) -> BifurcationGraph():
 
@@ -1811,7 +1861,8 @@ class ElfAnalyzerToolkit:
                 # Get label
                 label = f"""type: {node["subtype"]}\ndepth: {node["depth"]}\ndepth to inf connection: {node["3d_depth"]}\nmax elf: {node["max_elf"]}\ncharge: {node["charge"]}\nvolume: {node["volume"]}\natom distance: {round(node["atom_distance"],2)}\nnearest atom index: {node["nearest_atom"]}\nnearest atom type: {node["nearest_atom_type"]}"""
                 if node.get("bare_electron_indicator", None) is not None:
-                    label += f'\ndistance minus atom radius: {round(node["dist_minus_radius"],2)}'
+                    label += f'\nfeature radius: {round(node["feature_radius"],2)}'
+                    label += f'\ncoord number: {node["coord_num"]}\ncoord atoms: {node["coord_atoms"]}'
                     label += f"\nBEI array: {node['bare_electron_scores'].round(2)}"
                 types.append(node["subtype"])
             else:
@@ -1976,6 +2027,7 @@ class ElfAnalyzerToolkit:
         include_lone_pairs: bool = False,
         include_shared_features: bool = True,
         metal_depth_cutoff: float = 0.1,
+        metal_charge_cutoff: float = 0.2,
         min_covalent_angle: float = 135,
         min_covalent_bond_ratio: float = 0.4,
         shell_depth: float = 0.05,
@@ -2001,6 +2053,7 @@ class ElfAnalyzerToolkit:
                 resolution,
                 shell_depth=shell_depth,
                 metal_depth_cutoff=metal_depth_cutoff,
+                metal_charge_cutoff=metal_charge_cutoff,
                 min_covalent_angle=min_covalent_angle,
                 min_covalent_bond_ratio=min_covalent_bond_ratio,
             )
@@ -2032,6 +2085,7 @@ class ElfAnalyzerToolkit:
                 resolution,
                 shell_depth=shell_depth,
                 metal_depth_cutoff=metal_depth_cutoff,
+                metal_charge_cutoff=metal_charge_cutoff,
                 min_covalent_angle=min_covalent_angle,
                 min_covalent_bond_ratio=min_covalent_bond_ratio,
             )
@@ -2104,7 +2158,7 @@ class ElfAnalyzerToolkit:
                         ],  # Note we use the depth to an infinite connection rather than true depth
                         attributes["charge"],
                         attributes["volume"],
-                        attributes["dist_minus_radius"],
+                        attributes["feature_radius"],
                     ]
                 )
                 # check if we meet all conditions

@@ -258,15 +258,17 @@ class Grid(VolumetricData):
         init_coords = coords + 1
         new_coords = coords.copy()
         # First hill climb until the voxel max is reached
-        while not np.allclose(init_coords, new_coords, rtol=0, atol=0.001):
+        cycles = 0
+        while not np.allclose(init_coords, new_coords, rtol=0, atol=0.001) and cycles < 100:
             init_coords = new_coords.copy()
-            subset = self.get_slice_around_voxel_coord(init_coords, 2)
+            subset = self.get_slice_around_voxel_coord(init_coords, neighbor_size)
             max_val = subset.max()
             max_loc = np.array(np.where(subset == max_val))
             res = max_loc.mean(axis=1).round()
-            local_offset = res - 2  # shift from subset center
+            local_offset = res - neighbor_size  # shift from subset center
             voxel_coords = new_coords + local_offset
             new_coords = voxel_coords % np.array(self.shape)
+            cycles += 1
         # Now get the average in the area
         # Use np.ix_ to get the full 3D cube using broadcasting
         subset = self.get_slice_around_voxel_coord(new_coords, neighbor_size)

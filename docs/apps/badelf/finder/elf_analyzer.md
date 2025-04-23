@@ -59,6 +59,7 @@ results = finder.get_full_analysis(
     resolution=0.01,
     include_lone_pairs=False,
     metal_depth_cutoff=0.1,
+    metal_charge_cutoff=0.1,
     min_covalent_angle=135,
     min_covalent_bond_ratio=0.4,
     shell_depth=0.05,

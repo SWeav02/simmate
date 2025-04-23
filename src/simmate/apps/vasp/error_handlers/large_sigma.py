@@ -91,6 +91,14 @@ class LargeSigma(ErrorHandler):
             # rewrite the INCAR with new settings
             incar.to_file(incar_filename)
             return f"switched KSPACING from {current_kspacing} to {new_kspacing}"
+        
+        # BUG-FIX If we still haven't succeeded, we can try decreasing the sigma
+        # value further. NOTE: What was the initial reasoning for 0.08 being the limit? -S. Weaver
+        if current_sigma > 0.02001:
+            new_sigma = current_sigma - 0.02
+            incar["SIGMA"] = new_sigma
+            incar.to_file(incar_filename)
+            return f"reduced SIGMA from {current_sigma} to {new_sigma}"
 
         # otherwise we can't do anything else and should flag the calculation
         # as failed

@@ -10,7 +10,10 @@ from simmate.engine import ErrorHandler
 class Posmap(ErrorHandler):
     is_monitor = True
     filename_to_check = "vasp.out"
-    possible_error_messages = ["POSMAP"]
+    possible_error_messages = [
+        "POSMAP",
+        "Inconsistent Bravais lattice types" # VASP 6 -S. Weaver
+        ]
 
     def correct(self, directory: Path) -> str:
         # load the INCAR file to view the current settings

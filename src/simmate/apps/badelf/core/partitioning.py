@@ -639,7 +639,9 @@ class PartitioningToolkit:
 
         neighbors = self.all_site_neighbor_pairs
         # get only this sites dataframe
-        site_df = neighbors.loc[neighbors["site_index"] == site_index]
+        site_df = neighbors.loc[neighbors["site_index"] == site_index].copy()
+        site_df["dist"] = site_df["dist"].round(4)
+        site_df = site_df.drop_duplicates(subset=["equiv_neigh_index", "dist"])
         site_df.reset_index(inplace=True, drop=True)
 
         # Get to the closest neighbor to the site that isn't a He dummy atom
@@ -651,87 +653,102 @@ class PartitioningToolkit:
             if neighbor_string != "E":
                 bond_dist = row["dist"]
                 break
-
-        # Interpolate the elf along this line
-        (
-            elf_positions,
-            elf_values,
-            label_values,
-        ) = self.get_partitioning_line_from_cart_coords(
-            site_cart_coords,
-            neigh_cart_coords,
-        )
-
-        # Make sure we don't have only assignments to a single site. If we do
-        # we want to place our radius right at the middle.
-        if len(np.unique(label_values)) == 1:
-            bond_frac = 0.5
-            distance_to_min = bond_frac * bond_dist
-            return distance_to_min
-
-        # Now we check if there is a covalent bond along our line
-        covalent = False
-        for label in np.unique(label_values):
-            if labeled_structure[label].specie.symbol == "Z":
-                covalent = True
-                break
-
-        # If there is, we want to use the maximum closest to the center as our
-        # radius
-        if covalent:
-            # we find the closest maximum to the center
-            maxima = self.find_maximum(elf_values)
-            unrelated_indices = np.where(
-                ~np.isin(label_values, [site_index, neigh_index])
+        
+        # BUG-FIX on some occasions, the closest atom doesn't give the shortest
+        # radius. We instead iterate over the site-neighbor coords within 1.5x
+        # the distance of the closest atom. This is closer to the value returned
+        # by the full BadELF analysis.
+        # get rows below 1.5x the dist
+        site_df = site_df.loc[site_df["dist"] <= 1.5*bond_dist]
+        min_radius = 100
+        for i, row in site_df.iterrows():
+            site_cart_coords = row["site_coords"]
+            neigh_cart_coords = row["neigh_coords"]
+            # Interpolate the elf along this line
+            (
+                elf_positions,
+                elf_values,
+                label_values,
+            ) = self.get_partitioning_line_from_cart_coords(
+                site_cart_coords,
+                neigh_cart_coords,
             )
-            new_maxima = []
-            for maximum in maxima:
-                if (
-                    np.isin(maximum[0], unrelated_indices)
-                    and (maximum[1] - min(elf_values)) > 0.01
-                ):
-                    new_maxima.append(maximum)
-            if len(new_maxima) > 0:
-                elf_min_index = self.get_closest_extrema_to_center(
-                    elf_values, new_maxima
-                )[0]
-                extrema = "max"
-            else:
-                elf_min_index = np.where(np.array(label_values) == site_index)[0].max()
-                extrema = "min"
-
-        else:
-            # We want to use the standard ionic radius, or the first point where
-            # we no longer have a basin related to our atom
-            try:
-                elf_min_index = np.where(np.array(label_values) != site_index)[0][0] - 1
-                extrema = "min"
-            except:
-                raise Exception(
-                    f"No radius could be found for atom index {site_index}. This can"
-                    " result from using too few valence electrons in your PPs. If you"
-                    " are sure this is not the case, please contact our team."
+    
+            # Make sure we don't have only assignments to a single site. If we do
+            # we want to place our radius right at the middle.
+            if len(np.unique(label_values)) == 1:
+                bond_frac = 0.5
+                distance_to_min = bond_frac * bond_dist
+                return distance_to_min
+    
+            # Now we check if there is a covalent bond along our line
+            covalent = False
+            for label in np.unique(label_values):
+                if labeled_structure[label].specie.symbol == "Z":
+                    covalent = True
+                    break
+    
+            # If there is, we want to use the maximum closest to the center as our
+            # radius
+            if covalent:
+                # we find the closest maximum to the center
+                maxima = self.find_maximum(elf_values)
+                unrelated_indices = np.where(
+                    ~np.isin(label_values, [site_index, neigh_index])
                 )
+                new_maxima = []
+                for maximum in maxima:
+                    if (
+                        np.isin(maximum[0], unrelated_indices)
+                        and (maximum[1] - min(elf_values)) > 0.01
+                    ):
+                        new_maxima.append(maximum)
+                if len(new_maxima) > 0:
+                    elf_min_index = self.get_closest_extrema_to_center(
+                        elf_values, new_maxima
+                    )[0]
+                    extrema = "max"
+                else:
+                    elf_min_index = np.where(np.array(label_values) == site_index)[0].max()
+                    extrema = "min"
+    
+            else:
+                # We want to use the standard ionic radius, or the first point where
+                # we no longer have a basin related to our atom.
+                # BUG-FIX in rare cases, we may have labels from other atoms that
+                # interject the labels for this atom. We want the last 
+                try:
+                    elf_min_index = np.where(np.array(label_values) != site_index)[0][0] - 1
+                    extrema = "min"
+                except:
+                    elf_min_index = -1
+                # -1 can happen if there is no assignment to this atom
+                if elf_min_index == -1:
+                    raise Exception(
+                        f"No radius could be found for atom index {site_index}. This can"
+                        " result from using too few valence electrons in your PPs. If you"
+                        " are sure this is not the case, please contact our team."
+                    )
+    
+            # refine the location of the radius
+            try:
+                global_min = self._refine_line_part_frac(
+                    positions=elf_positions,
+                    elf_min_index=elf_min_index,
+                    extrema=extrema,
+                    method=refine_method,
+                )
+                distance_to_min = global_min[2] * bond_dist
+            except:
+                bond_frac = elf_min_index / (len(elf_positions) - 1)
+                logging.warning(
+                    f"Refinement of radius failed. Unrefined bond fraction of {bond_frac} will be used."
+                )
+    
+                distance_to_min = bond_frac * bond_dist
+            min_radius = min(min_radius, distance_to_min)
 
-        # refine the location of the radius
-        try:
-            global_min = self._refine_line_part_frac(
-                positions=elf_positions,
-                elf_min_index=elf_min_index,
-                extrema=extrema,
-                method=refine_method,
-            )
-            distance_to_min = global_min[2] * bond_dist
-        except:
-            breakpoint()
-            bond_frac = elf_min_index / (len(elf_positions) - 1)
-            logging.warning(
-                f"Refinement of radius failed. Unrefined bond fraction of {bond_frac} will be used."
-            )
-
-            distance_to_min = bond_frac * bond_dist
-
-        return distance_to_min
+        return min_radius
 
     @staticmethod
     def _get_vector_plane_intersection(

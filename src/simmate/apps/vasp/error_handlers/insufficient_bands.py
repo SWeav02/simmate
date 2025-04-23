@@ -4,6 +4,7 @@ from pathlib import Path
 
 from simmate.apps.vasp.inputs import Incar
 from simmate.engine import ErrorHandler
+import math
 
 
 class InsufficientBands(ErrorHandler):
@@ -36,7 +37,7 @@ class InsufficientBands(ErrorHandler):
                     nbands_current = int(line.split()[-1])
                     break
         # increase the number of bands by 10%
-        nbands_new = int(nbands_current * 1.1)
+        nbands_new = math.ceil(nbands_current * 1.1)
         incar["NBANDS"] = nbands_new
         correction = f"switch NBANDS from {nbands_current} to {nbands_new} (+10%)"
 

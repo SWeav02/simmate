@@ -91,6 +91,7 @@ class BadElfToolkit:
             include_lone_pairs=False,
             include_shared_features=True,
             metal_depth_cutoff=0.1,
+            metal_charge_cutoff=0.2,
             min_covalent_angle=135,
             min_covalent_bond_ratio=0.4,
             shell_depth=0.05,
@@ -1044,7 +1045,23 @@ class BadElfToolkit:
             for volume in volumes.values():
                 total_volume += volume
         results["vacuum_volume"] = round(self.structure.volume - total_volume, 4)
-
+        
+        # convert any numpy objects to python
+        def convert_numpy(obj):
+            if isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, dict):
+                return {k: convert_numpy(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy(i) for i in obj]
+            return obj
+        for key, value in results.items():
+            results[key] = convert_numpy(value)
+        
         return results
 
     def write_results_csv(self):
@@ -1074,6 +1091,7 @@ class BadElfToolkit:
             resolution=0.01,
             include_lone_pairs=False,
             metal_depth_cutoff=0.1,
+            metal_charge_cutoff=0.2,
             min_covalent_angle=135,
             min_covalent_bond_ratio=0.4,
             shell_depth=0.05,
@@ -1319,6 +1337,7 @@ class SpinBadElfToolkit:
             resolution=0.01,
             include_lone_pairs=False,
             metal_depth_cutoff=0.1,
+            metal_charge_cutoff=0.2,
             min_covalent_angle=135,
             min_covalent_bond_ratio=0.4,
             shell_depth=0.05,
@@ -1506,6 +1525,8 @@ class SpinBadElfToolkit:
         if not self.spin_polarized:
             results = self.badelf_spin_up_results
             results["separate_spin"] = self.separate_spin
+            results["bifurcation_graph"] = results["bifurcation_graph"].to_json()
+            results["labeled_structure"] = results["labeled_structure"].to_json()
             return results
         # otherwise we want to combine our results
         logging.info("Getting results for spin-up")
@@ -1784,6 +1805,7 @@ class SpinBadElfToolkit:
             resolution=0.01,
             include_lone_pairs=False,
             metal_depth_cutoff=0.1,
+            metal_charge_cutoff=0.2,
             min_covalent_angle=135,
             min_covalent_bond_ratio=0.4,
             shell_depth=0.05,

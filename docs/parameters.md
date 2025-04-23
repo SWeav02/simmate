@@ -368,6 +368,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
         include_lone_pairs: false,
         include_shared_features: true,
         metal_depth_cutoff: 0.1,
+        metal_charge_cutoff: 0.1,
         min_covalent_angle: 135,
         min_covalent_bond_ratio: 0.4,
         shell_depth: 0.05,
@@ -386,6 +387,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
     include_lone_pairs = false
     include_shared_features = true
     metal_depth_cutoff = 0.1
+    metal_charge_cutoff = 0.1
     min_covalent_angle = 135
     min_covalent_bond_ratio = 0.4
     shell_depth = 0.05
@@ -404,6 +406,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
         include_lone_pairs = false,
         include_shared_features = true,
         metal_depth_cutoff = 0.1,
+        metal_charge_cutoff = 0.1,
         min_covalent_angle = 135,
         min_covalent_bond_ratio = 0.4,
         shell_depth = 0.05,
@@ -434,6 +437,10 @@ Whether or not to include shared features such as metallic/covalent bonds in the
 ### metal_depth_cutoff
 
 For ELF features other than atom cores/shells or lone-pairs, this parameter controls the maximum depth (Difference from ELF maximum to bifurcation) that a metallic feature can have. Any non-atomic/lone-pair feature with a depth below this value will be assigned as metallic.
+
+### metal_charge_cutoff
+
+For ELF features other than atom cores/shells or lone-pairs, this parameter controls the maximum charge that a metallic feature can have. Any non-atomic/lone-pair feature with a charge below this value will be assigned as metallic.
 
 ### min_covalent_angle
 

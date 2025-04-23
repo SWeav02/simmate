@@ -71,6 +71,7 @@ elf_analyzer_kwargs: # Settings for the ElfAnalyzerToolkit. See ElfAnalyzerToolk
     include_lone_pairs: false,
     include_shared_features: true,
     metal_depth_cutoff: 0.1,
+    metal_charge_cutoff: 0.1,
     min_covalent_angle: 135,
     min_covalent_bond_ratio: 0.35,
     shell_depth: 0.05,
