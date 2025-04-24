@@ -42,18 +42,10 @@ class ElfAnalysis(Structure, Calculation):
     The step rate at which the ELF was scanned to determine bifurcations
     """
     
-    metal_depth_cutoff = table_column.FloatField(blank=True, null=True)
+    min_covalent_charge = table_column.FloatField(blank=True, null=True)
     """
-    The depth under which a non-atomic feature is considered to be a
-    metallic feature. The depth is defined as the difference between the
-    maximum ELF of the feature to the ELF at which it connects to an
-    ELF domain extending infinitely
-    """
-    
-    metal_charge_cutoff = table_column.FloatField(blank=True, null=True)
-    """
-    The charge under which a non-atomic feature is considered to be a
-    metallic feature. This prevents features along atom bonds with low
+    The minimum charge required for a site to be considered a covalent
+    bond. This prevents metallic features nearly along atom bonds with low
     charges from being classified as covalent.
     """
     

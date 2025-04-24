@@ -638,6 +638,7 @@ class PartitioningToolkit:
         # get closest neighbor for the given site
 
         neighbors = self.all_site_neighbor_pairs
+        
         # get only this sites dataframe
         site_df = neighbors.loc[neighbors["site_index"] == site_index].copy()
         site_df["dist"] = site_df["dist"].round(4)
@@ -664,6 +665,8 @@ class PartitioningToolkit:
         for i, row in site_df.iterrows():
             site_cart_coords = row["site_coords"]
             neigh_cart_coords = row["neigh_coords"]
+            neighbor_string = row["neigh_symbol"]
+            neigh_index = row["neigh_index"]
             # Interpolate the elf along this line
             (
                 elf_positions,
@@ -679,14 +682,14 @@ class PartitioningToolkit:
             if len(np.unique(label_values)) == 1:
                 bond_frac = 0.5
                 distance_to_min = bond_frac * bond_dist
-                return distance_to_min
+                min_radius = min(distance_to_min, min_radius)
+                continue
     
-            # Now we check if there is a covalent bond along our line
+            # Now we check if there is a covalent or lone-pair along our line
             covalent = False
             for label in np.unique(label_values):
                 if labeled_structure[label].specie.symbol == "Z":
                     covalent = True
-                    break
     
             # If there is, we want to use the maximum closest to the center as our
             # radius
@@ -708,11 +711,18 @@ class PartitioningToolkit:
                         elf_values, new_maxima
                     )[0]
                     extrema = "max"
+                    # BUG-FIX: Sometimes, especially in calculations with low PPs,
+                    # part of a covalent feature overlaps with a bond, but isn't the
+                    # source of the maximum. Usually a lone-pair is instead. Regardless
+                    # we check if this this index belongs to a covalent bond
+                    label = label_values[elf_min_index]
+                    if not labeled_structure[label].specie.symbol == "Z":
+                        covalent = False
                 else:
-                    elf_min_index = np.where(np.array(label_values) == site_index)[0].max()
-                    extrema = "min"
+                    # No max was found and we default to non-covalent method
+                    covalent = False
     
-            else:
+            if not covalent:
                 # We want to use the standard ionic radius, or the first point where
                 # we no longer have a basin related to our atom.
                 # BUG-FIX in rare cases, we may have labels from other atoms that
@@ -724,11 +734,9 @@ class PartitioningToolkit:
                     elf_min_index = -1
                 # -1 can happen if there is no assignment to this atom
                 if elf_min_index == -1:
-                    raise Exception(
-                        f"No radius could be found for atom index {site_index}. This can"
-                        " result from using too few valence electrons in your PPs. If you"
-                        " are sure this is not the case, please contact our team."
-                    )
+                    # We can't assign a radius and we want to continue
+                    continue
+                    
     
             # refine the location of the radius
             try:
@@ -743,10 +751,16 @@ class PartitioningToolkit:
                 bond_frac = elf_min_index / (len(elf_positions) - 1)
                 logging.warning(
                     f"Refinement of radius failed. Unrefined bond fraction of {bond_frac} will be used."
-                )
-    
+                )    
                 distance_to_min = bond_frac * bond_dist
+            # print(f"Neighbor {neighbor_string} dist: {distance_to_min}")
             min_radius = min(min_radius, distance_to_min)
+        if min_radius == 100:
+            raise Exception(
+                f"No radius could be found for atom index {site_index}. This can"
+                " result from using too few valence electrons in your PPs. If you"
+                " are sure this is not the case, please contact our team."
+            )
 
         return min_radius
 

@@ -84,7 +84,15 @@ class Walltime(ErrorHandler):
 
         # If the remaining time is less than our buffer time or time for 2
         # steps, then we also want to begin shutdown out of caution.
-        time_per_step = self._get_max_step_time(directory)
+        # BUG: This step failed in multiple cases while running high-throughput
+        # R2SCAN calculation with VASP 6. The error seems to be with the Outcar
+        # class as it tries to read in the OUTCAR. I couldn't replicate this when
+        # reading in the OUTCAR manually. For now I'm just making this return False
+        # if it fails. - S. Weaver
+        try:
+            time_per_step = self._get_max_step_time(directory)
+        except:
+            return False
 
         if (remaining_time < self.buffer_time) or (remaining_time < time_per_step * 2):
             # make sure the calculation didn't "finish at the buzzer"

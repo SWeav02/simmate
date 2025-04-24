@@ -367,8 +367,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
         resolution: 0.01,
         include_lone_pairs: false,
         include_shared_features: true,
-        metal_depth_cutoff: 0.1,
-        metal_charge_cutoff: 0.1,
+        min_covalent_charge: 0.6,
         min_covalent_angle: 135,
         min_covalent_bond_ratio: 0.4,
         shell_depth: 0.05,
@@ -386,8 +385,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
     resolution = 0.01
     include_lone_pairs = false
     include_shared_features = true
-    metal_depth_cutoff = 0.1
-    metal_charge_cutoff = 0.1
+    min_covalent_charge = 0.6
     min_covalent_angle = 135
     min_covalent_bond_ratio = 0.4
     shell_depth = 0.05
@@ -405,8 +403,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
         resolution = 0.01,
         include_lone_pairs = false,
         include_shared_features = true,
-        metal_depth_cutoff = 0.1,
-        metal_charge_cutoff = 0.1,
+        min_covalent_charge = 0.6,
         min_covalent_angle = 135,
         min_covalent_bond_ratio = 0.4,
         shell_depth = 0.05,
@@ -434,13 +431,9 @@ Whether or not to include lone-pairs in the labeled structure. It is generally r
 
 Whether or not to include shared features such as metallic/covalent bonds in the labeled structure. If splitting these features at their maxima with planes is the desired output, set to `false`. If the goal is a comprehensive charge analysis of these features, set to `true`. If set to `true`, the `shared_feature_algorithm` parameter will control how they are separated from nearby atoms/features.
 
-### metal_depth_cutoff
+### min_covalent_charge
 
-For ELF features other than atom cores/shells or lone-pairs, this parameter controls the maximum depth (Difference from ELF maximum to bifurcation) that a metallic feature can have. Any non-atomic/lone-pair feature with a depth below this value will be assigned as metallic.
-
-### metal_charge_cutoff
-
-For ELF features other than atom cores/shells or lone-pairs, this parameter controls the maximum charge that a metallic feature can have. Any non-atomic/lone-pair feature with a charge below this value will be assigned as metallic.
+For ELF features other than atom cores/shells or lone-pairs, this parameter controls the minimum charge a feature must have to be considered covalent. Any non-atomic/lone-pair feature with a charge below this value will be assigned as metallic or a bare electron.
 
 ### min_covalent_angle
 
@@ -572,8 +565,7 @@ The required labels for each type of non-atomic feature are:
 | Covalent Bond      | "Z"      | 
 | Lone-Pair   | "Lp"     | 
 | Metal     | "M"      | 
-| Electride     | "E"     | 
-| Other Bare Electron       | "Le"       | 
+| Electride/Bare Electron     | "E"     | 
 
 === "yaml"
     ``` yaml

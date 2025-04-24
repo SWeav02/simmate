@@ -586,11 +586,15 @@ class ElfAnalyzerToolkit:
         unscaled_elf_grid,
         resolution: float = 0.01,
         shell_depth: float = 0.05,
-        metal_depth_cutoff: float = 0.1,
-        metal_charge_cutoff: float = 0.2,
+        min_covalent_charge: float = 0.6,
         min_covalent_angle: float = 135,
         min_covalent_bond_ratio: float = 0.4,
         radius_refine_method: str = "linear",
+        electride_elf_min: float = 0.5,
+        electride_depth_min: float = 0.2,
+        electride_charge_min: float = 0.5,
+        electride_volume_min: float = 10,
+        electride_radius_min: float = 0.3,
         **kwargs,
     ):
         """
@@ -899,27 +903,46 @@ class ElfAnalyzerToolkit:
         # Many covalent and metallic features are easy to find. Covalent bonds
         # are typically exactly along a bond between an atom and its nearest
         # neighbors. Metallic features have a low depth. We mark these first
-        graph = self._mark_metallic_covalent(
+        graph = self._mark_covalent_lonepair(
             bader,
             graph,
-            metal_depth_cutoff=metal_depth_cutoff,
-            metal_charge_cutoff=metal_charge_cutoff,
+            min_covalent_charge=min_covalent_charge,
             min_covalent_angle=min_covalent_angle,
             min_covalent_bond_ratio=min_covalent_bond_ratio,
         )
-        
+        # Sometimes if we've set our shell depth too low we will end up with only
+        # "lone-pairs" surrounding an atom. We relabel these as shells.
         graph = self._correct_for_high_depth_shells(graph)
 
         # Reduce any related shell basins to a single basin
         graph = self._reduce_atomic_shells(graph)
 
         # Now we calculate a bare electron indicator for each valence basin. This
-        # is used just to give a sense of how bare an electron is.
+        # is used just to give a sense of how bare an electron is vs. a more common
+        # metallic feature.
         graph = self._mark_bare_electron_indicator(
-            graph, bader, elf_grid, radius_refine_method=radius_refine_method
+            graph=graph, 
+            bader=bader,
+            elf_grid=elf_grid, 
+            radius_refine_method=radius_refine_method,
         )
         
+        # Sometimes a bare electron or metal feature will be mislabeled due to it
+        # being nearly between two atoms. In these cases, the features are very
+        # far outside the atoms radius, while a covalent bond never is. We relabel them
+        # here.
         graph = self._correct_far_covalent_features(graph)
+        
+        # Finally, we want to distinguish between a metal and a bare electron.
+        # This is currently very arbitrary and based on a series of cutoffs.
+        graph = self._mark_metallic_or_electride(
+            graph,
+            electride_elf_min=electride_elf_min,
+            electride_depth_min=electride_depth_min,
+            electride_charge_min=electride_charge_min,
+            electride_volume_min=electride_volume_min,
+            electride_radius_min=electride_radius_min,
+            )
         
         # In some cases, the user may not have used a pseudopotential with enough core electrons.
         # This can result in an atom having no assigned core/shell, which will
@@ -949,26 +972,9 @@ class ElfAnalyzerToolkit:
         # for plotting
         for i in graph.nodes:
             node = graph.nodes[i]
-            if "split" in node.keys():
-                networkx.set_node_attributes(
-                    graph,
-                    {
-                        i: {
-                            "label": f"split: {node['split']}\n num: {node['num']}\n atom_num: {node['atom_num']}",
-                        }
-                    },
-                )
-
-            else:
+            if not "split" in node.keys():
                 try:
-                    networkx.set_node_attributes(
-                        graph,
-                        {
-                            i: {
-                                "label": f"max: {node['max_elf']}\ndepth: {node['depth']}\n charge: {node['charge']}\n type: {node['subtype'] or node['type']}\n",
-                            }
-                        },
-                    )
+                    subtype = node["subtype"]
                 except:
                     raise Exception(
                         "At least one ELF feature was not assigned. This is a bug. Please report to our github:"
@@ -1366,12 +1372,11 @@ class ElfAnalyzerToolkit:
 
         return graph
 
-    def _mark_metallic_covalent(
+    def _mark_covalent_lonepair(
         self,
         bader,
         graph: BifurcationGraph(),
-        metal_depth_cutoff: float = 0.1,
-        metal_charge_cutoff: float = 0.2,
+        min_covalent_charge: float = 0.6,
         min_covalent_angle: float = 135,
         min_covalent_bond_ratio: float = 0.4,
     ) -> BifurcationGraph():
@@ -1388,19 +1393,8 @@ class ElfAnalyzerToolkit:
             # Default to bare electron
             basin_type = "val"
             subtype = "bare electron"
-            
-            # First check for metallic character.
-            if (
-                attributes["3d_depth"] < metal_depth_cutoff
-                and attributes["charge"] < metal_charge_cutoff
-                and previous_subtype != "other"
-            ):
-                subtype = "metallic"
-                # set subtype
-                networkx.set_node_attributes(graph, {feature_idx: {"subtype": subtype}})
-                continue
 
-            # Next check for covalent character. 
+            # Check for covalent character based on position relative to bonds.
             # We create a temporary structure to calculate distances to neighboring
             # atoms. This is just to utilize pymatgen's distance method which
             # takes periodic boundaries into account.
@@ -1417,50 +1411,52 @@ class ElfAnalyzerToolkit:
             # We want to see if our feature lies directly between our atom and
             # any of its neighbors.
             covalent = False
-            for neigh_dict in atom_neighs:
-                # We use the temp structure to calculate distance between the
-                # feature and neighbors. This automatically acounts for wrapping
-                # in the unit cell
-                neigh_idx = neigh_dict["site_index"]
-                neigh_dist = round(temp_structure.get_distance(neigh_idx, -1), 2)
-                # We use the distance calculated by cnn for the atom/neigh dist
-                atom_neigh_dist = round(neigh_dict["site"].nn_distance, 2)
-                # Sometimes we have a lone-pair that appears to be within our
-                # angle cutoff (e.g. CaC2), but is much closer to one atom than
-                # a covalent bond would be. We check for this here with a ratio.
-                atom_dist_ratio = atom_dist / atom_neigh_dist
-                if atom_dist_ratio < min_covalent_bond_ratio:
-                    continue
-                # We want to apply the law of cosines to get angle with feature
-                # at center, then convert to degrees. This won't work if our feature
-                # is exactly along the bond, so we first check for that case.
-                # we check within a small tolerance for rounding errors
-                test_dist = round(atom_dist + neigh_dist, 2)
-                tolerance = 0.01
-                if (
-                    (test_dist - tolerance)
-                    <= atom_neigh_dist
-                    <= (test_dist + tolerance)
-                ):
-                    covalent = True
-                    break
-                try:
-                    feature_angle = math.acos(
-                        (atom_dist**2 + neigh_dist**2 - atom_neigh_dist**2)
-                        / (2 * atom_dist * neigh_dist)
-                    )
-                    feature_angle = feature_angle * 180 / math.pi
-                except:
-                    # We don't have a valid triange. This can happen if the feature
-                    # is along the bond but not between the atoms (lone-pairs)
-                    # or if we are comparing atoms not near the lone pair. In
-                    # either case we don't have a covalent bond and continue
-                    continue
-
-                # check that we're above the cutoff
-                if feature_angle > min_covalent_angle:
-                    covalent = True
-                    break
+            # If we're above our charge cutoff, we check if we are along a bond
+            if attributes["charge"] > min_covalent_charge:
+                for neigh_dict in atom_neighs:
+                    # We use the temp structure to calculate distance between the
+                    # feature and neighbors. This automatically acounts for wrapping
+                    # in the unit cell
+                    neigh_idx = neigh_dict["site_index"]
+                    neigh_dist = round(temp_structure.get_distance(neigh_idx, -1), 2)
+                    # We use the distance calculated by cnn for the atom/neigh dist
+                    atom_neigh_dist = round(neigh_dict["site"].nn_distance, 2)
+                    # Sometimes we have a lone-pair that appears to be within our
+                    # angle cutoff (e.g. CaC2), but is much closer to one atom than
+                    # a covalent bond would be. We check for this here with a ratio.
+                    atom_dist_ratio = atom_dist / atom_neigh_dist
+                    if atom_dist_ratio < min_covalent_bond_ratio:
+                        continue
+                    # We want to apply the law of cosines to get angle with feature
+                    # at center, then convert to degrees. This won't work if our feature
+                    # is exactly along the bond, so we first check for that case.
+                    # we check within a small tolerance for rounding errors
+                    test_dist = round(atom_dist + neigh_dist, 2)
+                    tolerance = 0.01
+                    if (
+                        (test_dist - tolerance)
+                        <= atom_neigh_dist
+                        <= (test_dist + tolerance)
+                    ):
+                        covalent = True
+                        break
+                    try:
+                        feature_angle = math.acos(
+                            (atom_dist**2 + neigh_dist**2 - atom_neigh_dist**2)
+                            / (2 * atom_dist * neigh_dist)
+                        )
+                        feature_angle = feature_angle * 180 / math.pi
+                    except:
+                        # We don't have a valid triange. This can happen if the feature
+                        # is along the bond but not between the atoms (lone-pairs)
+                        # or if we are comparing atoms not near the lone pair. In
+                        # either case we don't have a covalent bond and continue
+                        continue
+    
+                    # check that we're above the cutoff
+                    if feature_angle > min_covalent_angle:
+                        covalent = True
+                        break
             # Now we've noted if our feature is covalent. If it is, we label it
             # as such
             if covalent:
@@ -1567,6 +1563,8 @@ class ElfAnalyzerToolkit:
         for feature_idx, attributes in valence_summary.items():
             if attributes["subtype"] == "covalent":
                 species = "Z"
+            elif attributes["subtype"] == "lone-pair":
+                species = "Lp"
             else:
                 species = "X"
             for basin_idx in attributes["basins"]:
@@ -1748,7 +1746,50 @@ class ElfAnalyzerToolkit:
             feature_subtype = attributes["subtype"]
             if feature_radius > 0.2 and feature_subtype in ["covalent", "lone-pair"]:
                 networkx.set_node_attributes(graph,{feature_idx: {"subtype": "bare electron"}},)
-            
+        return graph
+    
+    def _mark_metallic_or_electride(
+            self,
+            graph: BifurcationGraph(),
+            electride_elf_min: float = 0.5,
+            electride_depth_min: float = 0.2,
+            electride_charge_min: float = 0.5,
+            electride_volume_min: float = 10,
+            electride_radius_min: float = 0.3,
+                                    ) -> BifurcationGraph():
+        valence_summary = self.get_valence_summary(graph)
+        # create an array of our conditions to check against
+        conditions = np.array(
+            [
+                electride_elf_min,
+                electride_depth_min,
+                electride_charge_min,
+                electride_volume_min,
+                electride_radius_min,
+            ]
+        )
+        for feature_idx, attributes in valence_summary.items():
+            # we have a bare electron. We check each condition
+            condition_test = np.array(
+                [
+                    attributes["max_elf"],
+                    attributes[
+                        "3d_depth"
+                    ],  # Note we use the depth to an infinite connection rather than true depth
+                    attributes["charge"],
+                    attributes["volume"],
+                    attributes["feature_radius"],
+                ]
+            )
+            # check if we meet all conditions. If so we have a bare electron/electride
+            if np.all(condition_test > conditions):
+                subtype = "bare electron"
+            else:
+                # We don't meet our conditions so we consider this some form
+                # of metallic feature
+                subtype = "metallic"
+            networkx.set_node_attributes(graph,{feature_idx: {"subtype": subtype}},)
+        
         return graph
             
 
@@ -2026,8 +2067,7 @@ class ElfAnalyzerToolkit:
         resolution: float = 0.01,
         include_lone_pairs: bool = False,
         include_shared_features: bool = True,
-        metal_depth_cutoff: float = 0.1,
-        metal_charge_cutoff: float = 0.2,
+        min_covalent_charge: float = 0.6,
         min_covalent_angle: float = 135,
         min_covalent_bond_ratio: float = 0.4,
         shell_depth: float = 0.05,
@@ -2052,53 +2092,43 @@ class ElfAnalyzerToolkit:
             graph_up, graph_down = self.get_bifurcation_graphs(
                 resolution,
                 shell_depth=shell_depth,
-                metal_depth_cutoff=metal_depth_cutoff,
-                metal_charge_cutoff=metal_charge_cutoff,
+                min_covalent_charge=min_covalent_charge,
                 min_covalent_angle=min_covalent_angle,
                 min_covalent_bond_ratio=min_covalent_bond_ratio,
+                electride_elf_min=electride_elf_min,
+                electride_depth_min=electride_depth_min,
+                electride_charge_min=electride_charge_min,
+                electride_volume_min=electride_volume_min,
+                electride_radius_min=electride_radius_min,
             )
             structure_up = self._get_labeled_structure(
                 graph_up,
-                # self.bader_up,
                 include_lone_pairs,
                 include_shared_features,
-                electride_elf_min,
-                electride_depth_min,
-                electride_charge_min,
-                electride_volume_min,
-                electride_radius_min,
             )
             structure_down = self._get_labeled_structure(
                 graph_down,
-                # self.bader_down,
                 include_lone_pairs,
                 include_shared_features,
-                electride_elf_min,
-                electride_depth_min,
-                electride_charge_min,
-                electride_volume_min,
-                electride_radius_min,
             )
             return structure_up, structure_down
         else:
             graph = self.get_bifurcation_graphs(
                 resolution,
                 shell_depth=shell_depth,
-                metal_depth_cutoff=metal_depth_cutoff,
-                metal_charge_cutoff=metal_charge_cutoff,
+                min_covalent_charge=min_covalent_charge,
                 min_covalent_angle=min_covalent_angle,
                 min_covalent_bond_ratio=min_covalent_bond_ratio,
+                electride_elf_min=electride_elf_min,
+                electride_depth_min=electride_depth_min,
+                electride_charge_min=electride_charge_min,
+                electride_volume_min=electride_volume_min,
+                electride_radius_min=electride_radius_min,
             )
             return self._get_labeled_structure(
                 graph,
-                # self.bader_up,
                 include_lone_pairs,
                 include_shared_features,
-                electride_elf_min,
-                electride_depth_min,
-                electride_charge_min,
-                electride_volume_min,
-                electride_radius_min,
             )
 
     def _get_labeled_structure(
@@ -2106,11 +2136,6 @@ class ElfAnalyzerToolkit:
         graph: BifurcationGraph(),
         include_lone_pairs: bool = False,
         include_shared_features: bool = True,
-        electride_elf_min: float = 0.5,
-        electride_depth_min: float = 0.2,
-        electride_charge_min: float = 0.5,
-        electride_volume_min: float = 10,
-        electride_radius_min: float = 0.3,
         **kwargs,
     ):
         # First, we get the valence features for this graph and create a
@@ -2118,83 +2143,34 @@ class ElfAnalyzerToolkit:
         valence_features = self.get_valence_summary(graph)
         structure = self.structure.copy()
         structure.remove_oxidation_states()
-        # empty_structure = structure.copy()
-        # empty_structure.remove_species(empty_structure.symbol_set)
-        # create an array of our conditions to check against
-        conditions = np.array(
-            [
-                electride_elf_min,
-                electride_depth_min,
-                electride_charge_min,
-                electride_volume_min,
-                electride_radius_min,
-            ]
-        )
         for feat_idx, attributes in valence_features.items():
             # get our subtype
             subtype = attributes["subtype"]
             # if our subtype is anothing other than "bare electron" we have
             # a covalent bond or metal bond and append a Z dummy atom
+            if subtype == "bare electron":
+                species = "e"
+                continue
+            if not include_shared_features:
+                continue
             if subtype == "covalent":
-                if not include_shared_features:
-                    continue
                 species = "z"
             elif subtype == "metallic":
-                if not include_shared_features:
-                    continue
                 species = "m"
             elif subtype == "lone-pair":
-                if not include_lone_pairs:
-                    continue
                 species = "lp"
-
-            else:
-                # we have a bare electron. We check each condition
-                condition_test = np.array(
-                    [
-                        attributes["max_elf"],
-                        attributes[
-                            "3d_depth"
-                        ],  # Note we use the depth to an infinite connection rather than true depth
-                        attributes["charge"],
-                        attributes["volume"],
-                        attributes["feature_radius"],
-                    ]
-                )
-                # check if we meet all conditions
-                if np.all(condition_test > conditions):
-                    species = "e"
-                else:
-                    if not include_shared_features:
-                        continue
-                    species = "le"
 
             # Now that we have the type of feature, we want to add it to our
             # structure.
             frac_coords = attributes["frac_coords"]
             structure.append(species, frac_coords)
-            # basins = attributes["basins"]
-            # # Then we get their fractional coords
-            # frac_coords = bader.bader_maxima_fractional[basins]
-            # if len(frac_coords) == 1:
-            #     structure.append(species, frac_coords[0])
-            # else:
-            #     # We append these to an empty structure and use pymatgen's
-            #     # merge method to get their average position
-            #     temp_structure = empty_structure.copy()
-            #     for frac_coord in frac_coords:
-            #         temp_structure.append("He", frac_coord)
-            #     if len(temp_structure) > 1:
-            #         temp_structure.merge_sites(tol=1, mode="average")
-            #     frac_coord = temp_structure.frac_coords[0]
-            #     structure.append(species, frac_coord)
 
         # To find the atoms/electrides surrounding a covalent/metallic bond,
         # we need the structure to be organized with atoms first, then electrides,
         # then whatever else. We organize everything here.
         electride_indices = structure.indices_from_symbol("E")
         other_indices = []
-        for symbol in ["M", "Le", "Z", "Lp"]:
+        for symbol in ["M", "Z", "Lp"]:
             other_indices.extend(structure.indices_from_symbol(symbol))
         sorted_structure = self.structure.copy()
         sorted_structure.remove_oxidation_states()

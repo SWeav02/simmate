@@ -58,8 +58,7 @@ Once the class is initialized, all of the results can be obtained:
 results = finder.get_full_analysis(
     resolution=0.01,
     include_lone_pairs=False,
-    metal_depth_cutoff=0.1,
-    metal_charge_cutoff=0.1,
+    min_covalent_charge=0.6,
     min_covalent_angle=135,
     min_covalent_bond_ratio=0.4,
     shell_depth=0.05,
@@ -142,11 +141,10 @@ If the structure has any non-atomic features, they will be labeled with Dummy at
 | Covalent Bond      | "Z"      | 
 | Lone-Pair   | "Lp"     | 
 | Metal     | "M"      | 
-| Electride     | "E"     | 
-| Other Bare Electron       | "Le"       | 
+| Electride/Bare electron     | "E"     | 
 
 !!! note
-    Admittedly, some of these labels are not intuitive. This is due to pymatgen's Structure object limiting dummy atom labels to symbols that don't start with letters shared by an element (e.g. "Cov" isn't available because of C and Co)
+    Admittedly, Z is not intuitive. This is due to pymatgen's Structure object limiting dummy atom labels to symbols that don't start with letters shared by an element (i.e. "Cov" isn't available because of C and Co)
 
 The labeled structures can then be written to files for visualization in software such as VESTA or OVITO.
 
