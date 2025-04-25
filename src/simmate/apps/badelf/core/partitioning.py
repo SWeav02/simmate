@@ -687,9 +687,11 @@ class PartitioningToolkit:
     
             # Now we check if there is a covalent or lone-pair along our line
             covalent = False
+            covalent_indices = []
             for label in np.unique(label_values):
                 if labeled_structure[label].specie.symbol == "Z":
                     covalent = True
+                    covalent_indices.append(label)
     
             # If there is, we want to use the maximum closest to the center as our
             # radius
@@ -725,10 +727,14 @@ class PartitioningToolkit:
             if not covalent:
                 # We want to use the standard ionic radius, or the first point where
                 # we no longer have a basin related to our atom.
-                # BUG-FIX in rare cases, we may have labels from other atoms that
-                # interject the labels for this atom. We want the last 
+                # BUG-FIX In rare cases we may have a covalent feature that interjects
+                # near the beginning of the bond due to lack of core PPs. We ignore
+                # covalent sections of the bond to account for this.
                 try:
-                    elf_min_index = np.where(np.array(label_values) != site_index)[0][0] - 1
+                    elf_min_index = np.where(
+                        (np.array(label_values) != site_index) 
+                        & np.isin(np.array(label_values), covalent_indices, invert=True)
+                        )[0][0] - 1
                     extrema = "min"
                 except:
                     elf_min_index = -1
@@ -736,7 +742,6 @@ class PartitioningToolkit:
                 if elf_min_index == -1:
                     # We can't assign a radius and we want to continue
                     continue
-                    
     
             # refine the location of the radius
             try:
