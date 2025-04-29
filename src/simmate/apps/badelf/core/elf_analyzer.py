@@ -1771,12 +1771,11 @@ class ElfAnalyzerToolkit:
             # to set an ideal distance corresponding to 1 and a minimum distance
             # corresponding to 0. The ideal distance is the sum of the atoms radius
             # plus the radius of a true bare electron (approx the H- radius). The
-            # minimum distance is somewhat arbitrary, but should be around the
-            # atoms radius as this corresponds to covalent bond type behavior.
-            # We set the minimum to 90% of the atoms radius to account for variation
-            min_dist = atom_radius * 0.9
-            max_dist = atom_radius + hydride_radius
-            dist_contribution = (dist - min_dist) / (max_dist - min_dist)
+            # minimum radius should be 0, corresponding to the radius of the atom.
+            # Thus covalent bonds should have a value of 0 and lone-pairs may
+            # be slightly within this radius, also recieving a value of 0.
+            radius = dist - atom_radius
+            dist_contribution = radius / hydride_radius
             # limit to a range of 0 to 1
             dist_contribution = min(max(dist_contribution, 0), 1)
 
