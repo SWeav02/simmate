@@ -235,7 +235,6 @@ class ElfAnalyzerToolkit:
         self.charge_grid = charge_grid.copy()
         self.directory = directory
         self.ignore_low_pseudopotentials = ignore_low_pseudopotentials
-        self._basin_labeled_voxels = None
         # check if this is a spin polarized calculation and if the user wants
         # to pay attention to this.
         if elf_grid.is_spin_polarized and separate_spin:
@@ -586,6 +585,7 @@ class ElfAnalyzerToolkit:
         unscaled_elf_grid: Grid,
         resolution: float = 0.01,
         shell_depth: float = 0.05,
+        combine_shells: bool = True,
         min_covalent_charge: float = 0.6,
         min_covalent_angle: float = 135,
         min_covalent_bond_ratio: float = 0.4,
@@ -973,7 +973,8 @@ class ElfAnalyzerToolkit:
         graph = self._correct_for_high_depth_shells(graph)
 
         # Reduce any related shell basins to a single basin
-        graph = self._reduce_atomic_shells(graph)
+        if combine_shells:
+            graph = self._reduce_atomic_shells(graph)
 
         # Now we calculate a bare electron indicator for each valence basin. This
         # is used just to give a sense of how bare an electron is vs. a more common
@@ -2165,18 +2166,9 @@ class ElfAnalyzerToolkit:
 
     def get_labeled_structures(
         self,
-        resolution: float = 0.01,
         include_lone_pairs: bool = False,
         include_shared_features: bool = True,
-        min_covalent_charge: float = 0.6,
-        min_covalent_angle: float = 135,
-        min_covalent_bond_ratio: float = 0.4,
-        shell_depth: float = 0.05,
-        electride_elf_min: float = 0.5,
-        electride_depth_min: float = 0.2,
-        electride_charge_min: float = 0.5,
-        electride_volume_min: float = 10,
-        electride_radius_min: float = 0.3,
+        **cutoff_kwargs,
     ):
         """
         Returns a structure with dummy atoms at electride and shared
@@ -2191,16 +2183,7 @@ class ElfAnalyzerToolkit:
         """
         if self.spin_polarized:
             graph_up, graph_down = self.get_bifurcation_graphs(
-                resolution,
-                shell_depth=shell_depth,
-                min_covalent_charge=min_covalent_charge,
-                min_covalent_angle=min_covalent_angle,
-                min_covalent_bond_ratio=min_covalent_bond_ratio,
-                electride_elf_min=electride_elf_min,
-                electride_depth_min=electride_depth_min,
-                electride_charge_min=electride_charge_min,
-                electride_volume_min=electride_volume_min,
-                electride_radius_min=electride_radius_min,
+                **cutoff_kwargs,
             )
             structure_up = self._get_labeled_structure(
                 graph_up,
@@ -2215,16 +2198,7 @@ class ElfAnalyzerToolkit:
             return structure_up, structure_down
         else:
             graph = self.get_bifurcation_graphs(
-                resolution,
-                shell_depth=shell_depth,
-                min_covalent_charge=min_covalent_charge,
-                min_covalent_angle=min_covalent_angle,
-                min_covalent_bond_ratio=min_covalent_bond_ratio,
-                electride_elf_min=electride_elf_min,
-                electride_depth_min=electride_depth_min,
-                electride_charge_min=electride_charge_min,
-                electride_volume_min=electride_volume_min,
-                electride_radius_min=electride_radius_min,
+                **cutoff_kwargs,
             )
             return self._get_labeled_structure(
                 graph,
@@ -2381,3 +2355,36 @@ class ElfAnalyzerToolkit:
                 "plot": plot,
                 "structure": structure,
             }
+    
+    def write_feature_basins(self, bader, graph: BifurcationGraph(), nodes: list, file_pre:str = "ELFCAR"):
+        """
+        For a give list of nodes, writes the bader basins associated with
+        each.
+        """
+        for node in nodes:
+            basins = graph.nodes[node]["basins"]
+            basin_labeled_voxels = bader.bader_volumes.copy()
+            charge_mask = np.isin(basin_labeled_voxels, basins)
+            charge = bader.charge
+            empty_grid = np.zeros(charge.shape)
+            empty_grid[charge_mask] = charge[charge_mask]
+            grid = Grid(self.structure, data={"total":empty_grid})
+            grid.write_file(f"{file_pre}_{node}")
+    
+    def write_valence_basins(self, results: dict):
+        if self.spin_polarized:
+            graph_down = results["graph_down"]
+            bader_down = self.bader_down
+            nodes_down = self.get_valence_summary(graph_down)
+            self.write_feature_basins(bader_down, graph_down, nodes_down, file_pre="ELFCAR_down")
+            # get graph for spin up
+            graph_up = results["graph_up"]
+            bader_up = self.bader_up
+            nodes_up = self.get_valence_summary(graph_up)
+            self.write_feature_basins(bader_up, graph_up, nodes_up, file_pre="ELFCAR_up")
+        
+        else:
+            graph = results["graph"]
+            bader = self.bader_up
+            nodes = self.get_valence_summary(graph)
+            self.write_feature_basins(bader, graph, nodes, file_pre="ELFCAR")

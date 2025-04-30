@@ -62,6 +62,7 @@ results = finder.get_full_analysis(
     min_covalent_angle=135,
     min_covalent_bond_ratio=0.4,
     shell_depth=0.05,
+    combine_shells=True,
     electride_elf_min=0.5,
     electride_depth_min=0.2,
     electride_charge_min=0.5,

@@ -86,22 +86,7 @@ class BadElfToolkit:
         labeled_structure: Structure = None,
         ignore_low_pseudopotentials: bool = False,
         downscale_resolution: int = 1200,
-        elf_analyzer_kwargs: dict = dict(
-            resolution=0.01,
-            include_lone_pairs=False,
-            include_shared_features=True,
-            min_covalent_charge=0.6,
-            min_covalent_angle=135,
-            min_covalent_bond_ratio=0.4,
-            shell_depth=0.05,
-            electride_elf_min=0.5,
-            electride_depth_min=0.2,
-            electride_charge_min=0.5,
-            electride_volume_min=10,
-            electride_radius_min=0.3,
-            radius_refine_method="linear",
-            write_results=True,
-        ),
+        elf_analyzer_kwargs: dict = dict(),
     ):
         if partitioning_grid.structure != charge_grid.structure:
             raise ValueError("Grid structures must be the same.")

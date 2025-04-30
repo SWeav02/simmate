@@ -371,6 +371,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
         min_covalent_angle: 135,
         min_covalent_bond_ratio: 0.4,
         shell_depth: 0.05,
+        combine_shells: true,
         electride_elf_min: 0.5,
         electride_depth_min: 0.2,
         electride_charge_min: 0.5,
@@ -389,6 +390,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
     min_covalent_angle = 135
     min_covalent_bond_ratio = 0.4
     shell_depth = 0.05
+    combine_shells = true
     electride_elf_min = 0.5
     electride_depth_min = 0.2
     electride_charge_min = 0.5
@@ -407,6 +409,7 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
         min_covalent_angle = 135,
         min_covalent_bond_ratio = 0.4,
         shell_depth = 0.05,
+        combine_shells = True,
         electride_elf_min = 0.5,
         electride_depth_min = 0.2,
         electride_charge_min = 0.5,
@@ -448,6 +451,10 @@ When determining between a lone-pair or covalent bond, the algorithm will check 
 In ionic compounds, the unshared electrons will form a sphere around the more electronegative atom. As the bond becomes more covalent, this feature will break into smaller features along the atomic bonds. As covalency increases, the depth of these features increases. Thus, this parameter effectively defines a cutoff for what should be considered covalent vs. ionic.
 
 Additionally, due to voxelation, atomic shells may split into many different basins around their ELF maximum. This parameter also controls recombining these voxelated basins into one.
+
+### combine_shells
+
+Whether small shell basins should be combined to form one large one. This is largely to aid visualization, especially when the grid density is low resulting in many basins due to voxelation.
 
 ### electride_elf_min
 

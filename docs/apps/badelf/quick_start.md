@@ -74,6 +74,7 @@ elf_analyzer_kwargs: # Settings for the ElfAnalyzerToolkit. See ElfAnalyzerToolk
     min_covalent_angle: 135,
     min_covalent_bond_ratio: 0.35,
     shell_depth: 0.05,
+    combine_shells: true,
     electride_elf_min: 0.5,
     electride_depth_min: 0.2,
     electride_charge_min: 0.5,
