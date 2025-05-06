@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 from pymatgen.io.vasp import VolumetricData
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from scipy.interpolate import RegularGridInterpolator
-from scipy.ndimage import label, zoom
+from scipy.ndimage import label, zoom, binary_dilation
 
 
 class Grid(VolumetricData):
@@ -487,6 +487,117 @@ class Grid(VolumetricData):
         bader.min_surface_distance()
         return bader
 
+    def get_atoms_in_volume(self, volume_mask):
+        """
+        Checks if an atom is within this volume. This only checks the
+        area immediately around the atom, so outer core basins may not
+        be caught by this.
+        """
+        site_voxel_coords = self.get_voxel_coords_from_frac_full_array(
+            self.structure.frac_coords
+            ).astype(int)
+        atom_values = []
+        for atom_idx, atom_coords in enumerate(site_voxel_coords):
+            site_value = volume_mask[atom_coords[0], atom_coords[1], atom_coords[2]]
+            if site_value:
+                atom_values.append(atom_idx)
+        return atom_values
+
+    def get_atoms_surrounded_by_volume(self, mask, return_type: bool = False):
+        """
+        Checks if a list of basins completely surround any of the atoms
+        in the structure. This method uses scipy's ndimage package to
+        label features in the grid combined with a supercell to check
+        if atoms identical through translation are connected.
+        """
+        # first we get any atoms that are within the mask itself. These won't be
+        # found otherwise because they will always sit in unlabeled regions.
+        structure = np.ones([3, 3, 3])
+        dilated_mask = binary_dilation(mask, structure)
+        init_atoms = self.get_atoms_in_volume(dilated_mask)
+        # Now we create a supercell of the mask so we can check connections to
+        # neighboring cells. This will be used to check if the feature connects
+        # to itself in each direction
+        dilated_supercell_mask = self.get_2x_supercell(dilated_mask)
+        # We also get an inversion of this mask. This will be used to check if
+        # the mask surrounds each atom. To do this, we use the dilated supercell
+        # We do this to avoid thin walls being considered connections
+        # in the inverted mask
+        inverted_mask = dilated_supercell_mask == False
+        # Now we use use scipy to label unique features in our masks
+
+        inverted_feature_supercell = self.label(inverted_mask, structure)
+
+        # if an atom was fully surrounded, it should sit inside one of our labels.
+        # The same atom in an adjacent unit cell should have a different label.
+        # To check this, we need to look at the atom in each section of the supercell
+        # and see if it has a different label in each.
+        # Similarly, if the feature is disconnected from itself in each unit cell
+        # any voxel in the feature should have different labels in each section.
+        # If not, the feature is connected to itself in multiple directions and
+        # must surround many atoms.
+        transformations = np.array(
+            [
+                [0, 0, 0],  # -
+                [1, 0, 0],  # x
+                [0, 1, 0],  # y
+                [0, 0, 1],  # z
+                [1, 1, 0],  # xy
+                [1, 0, 1],  # xz
+                [0, 1, 1],  # yz
+                [1, 1, 1],  # xyz
+            ]
+        )
+        # Check each atom to determine how many atoms it surrounds
+        surrounded_sites = []
+        for i, site in enumerate(self.structure):
+            # Get the voxel coords of each atom in their equivalent spots in each
+            # quadrant of the supercell
+            frac_coords = site.frac_coords
+            transformed_coords = transformations + frac_coords
+            voxel_coords = self.get_voxel_coords_from_frac_full_array(
+                transformed_coords
+            ).astype(int)
+            # Get the feature label at each transformation. If the atom is not surrounded
+            # by this basin, at least some of these feature labels will be the same
+            features = inverted_feature_supercell[
+                voxel_coords[:, 0], voxel_coords[:, 1], voxel_coords[:, 2]
+            ]
+            if len(np.unique(features)) == 8:
+                # The atom is completely surrounded by this basin and the basin belongs
+                # to this atom
+                surrounded_sites.append(i)
+        surrounded_sites.extend(init_atoms)
+        surrounded_sites = np.unique(surrounded_sites)
+        types = []
+        for site in surrounded_sites:
+            if site in init_atoms:
+                types.append(0)
+            else:
+                types.append(1)
+        if return_type:
+            return surrounded_sites, types
+        return surrounded_sites
+    
+    def check_if_infinite_feature(self, mask: NDArray) -> bool:
+        """
+        Checks if a feature extends infinitely in at least one direction
+        """
+        structure = np.ones([3, 3, 3])
+        # Now we create a supercell of the mask so we can check connections to
+        # neighboring cells. This will be used to check if the feature connects
+        # to itself in each direction
+        supercell_mask = self.get_2x_supercell(mask)
+        # Now we use use scipy to label unique features in our masks
+        feature_supercell = self.label(supercell_mask, structure)
+        # First we check for feature connectivity. If we have 8 unique features,
+        # we have a feature that doesn't extend infinitely
+        inf_feature = False
+        if len(np.unique(feature_supercell)) != 9:
+            inf_feature = True
+
+        return inf_feature
+    
     def regrid(
         self,
         desired_resolution: int = 1200,

@@ -179,6 +179,7 @@ class ElfAnalysis(Structure, Calculation):
                 nearest_atom_type = feature.get("nearest_atom_type", None),
                 atom_distance = feature.get("atom_distance", None),
                 feature_radius = feature.get("feature_radius", None),
+                dist_beyond_atom = feature.get("dist_beyond_atom", None),
                 bare_electron_indicator = feature.get("bare_electron_indicator", None),
                 bare_electron_scores = feature.get("bare_electron_scores", None),
                 coord_number = feature.get("coord_num"),
@@ -306,9 +307,14 @@ class ElfFeatures(DatabaseTable):
     
     feature_radius = table_column.FloatField(blank=True, null=True)
     """
+    The distance from the maximum of this feature to the nearest point
+    on the partitioning surface.
+    """
+    
+    dist_beyond_atom = table_column.FloatField(blank=True, null=True)
+    """
     The distance from this feature to the neighboring atom minus that atoms
-    radius determined from the ELF. Uses the smallest radius from all
-    neighbors
+    radius determined from the ELF.
     """
     
     bare_electron_indicator = table_column.FloatField(blank=True, null=True)

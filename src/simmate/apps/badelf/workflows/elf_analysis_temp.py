@@ -6,200 +6,20 @@ import math
 import warnings
 from functools import cached_property
 from pathlib import Path
+import itertools
 
 import networkx
 import numpy as np
 import plotly.graph_objects as go
 import psutil
-from networkx import DiGraph
 from numpy.typing import NDArray
 from pymatgen.analysis.local_env import CrystalNN
-from scipy.ndimage import binary_dilation, binary_erosion
+from scipy.ndimage import binary_dilation
 
 from simmate.apps.badelf.core.partitioning import PartitioningToolkit
+from simmate.apps.badelf.core.utilities import UnionFind, BifurcationGraph
 from simmate.apps.bader.toolkit import Grid
 from simmate.toolkit import Structure
-
-
-class BifurcationGraph(DiGraph):
-    """
-    This is an expansion of networkx's Graph class specifically with
-    additional methods related to bifurcation plots.
-    """
-
-    def parent_index(self, n: int) -> int:
-        """
-        Returns the node index for the parent of the provided node index
-        """
-        predecessor_list = list(self.predecessors(n))
-        if len(predecessor_list) > 0:
-            return predecessor_list[0]
-        else:
-            return None
-
-    def parent_dict(self, n: int) -> dict:
-        """
-        Returns the dictionary of attributes assigned to the parent of
-        the provided node index
-        """
-        parent_index = self.parent_index(n)
-        if parent_index is not None:
-            return self.nodes[parent_index]
-        else:
-            return None
-
-    def deep_parent_indices(self, n: int) -> NDArray[np.int64]:
-        """
-        Returns the indices of all nodes connected to this node by
-        parents.
-        """
-        predecessor_list = []
-
-        current_predecessor = n
-        while current_predecessor is not None:
-            current_predecessor = self.parent_index(current_predecessor)
-            if current_predecessor is not None:
-                predecessor_list.append(current_predecessor)
-        return predecessor_list
-
-    def child_indices(self, n: int) -> NDArray[np.int64]:
-        """
-        Returns the indices of the children of this node if they exist
-        """
-        child_indices_list = list(self.successors(n))
-        return np.array(child_indices_list)
-
-    def child_dicts(self, n: int) -> dict:
-        """
-        Returns the dictionaries of attributes assigned to the children of
-        the provided node index. Returns a nested dict with child indices
-        as keys and dicts as values.
-        """
-        children = {}
-        for i in self.child_indices(n):
-            children[i] = self.nodes[i]
-        return children
-
-    def deep_child_indices(self, n: int) -> NDArray[np.int64]:
-        """
-        Returns the indices of all subsequent nodes after this node.
-        """
-        all_found = False
-        child_indices = self.child_indices(n)
-        while not all_found:
-            new_child_indices = child_indices.copy()
-            for i in child_indices:
-                new_child_indices = np.concatenate(
-                    [new_child_indices, self.child_indices(i)]
-                )
-            new_child_indices = np.unique(new_child_indices)
-            if len(child_indices) == len(new_child_indices):
-                all_found = True
-            child_indices = new_child_indices
-        return child_indices.astype(int)
-
-    def deep_child_dicts(self, n: int) -> dict:
-        """
-        Returns the dictionaries of attributes assigned subsequent nodes
-        after this node. Returns a nested dict with child indices
-        as keys and dicts as values.
-        """
-        children = {}
-        for i in self.deep_child_indices(n):
-            children[i] = self.nodes[i]
-        return children
-
-    def sibling_indices(self, n: int) -> NDArray[np.int64]:
-        """
-        Returns the indices of the siblings of this node if they exist
-        """
-        parent_idx = self.parent_index(n)
-        if parent_idx is None:
-            return
-        siblings = self.child_indices(parent_idx)
-        # remove self
-        siblings = siblings[siblings != n]
-        return siblings
-
-    def sibling_dicts(self, n: int) -> dict:
-        """
-        Returns the dictionaries of attributes assigned to the siblings of
-        the provided node index. Returns a nested dict with child indices
-        as keys and dicts as values.
-        """
-        siblings = {}
-        for i in self.sibling_indices(n):
-            siblings[i] = self.nodes[i]
-        return siblings
-
-    def to_dict(self) -> dict:
-        """
-        Converts graph into two dicts for the nodes and edges
-        """
-        graph_dict = {}
-        node_dict = {}
-        for node in self.nodes:
-            node_dict[node] = self.nodes[node]
-        edge_list = [edge for edge in self.edges]
-        graph_dict["nodes"] = node_dict
-        graph_dict["edges"] = edge_list
-        return graph_dict
-
-    @classmethod
-    def from_dict(cls, graph_dict: dict):
-        """
-        Converts from a dict to a bifurcation graph
-        """
-        new_graph = BifurcationGraph()
-
-        for node_idx in graph_dict["nodes"].keys():
-            new_graph.add_node(node_idx)
-
-        networkx.set_node_attributes(new_graph, graph_dict["nodes"])
-
-        for edge0, edge1 in graph_dict["edges"]:
-            new_graph.add_edge(edge0, edge1)
-
-        return new_graph
-
-    def to_json(self):
-        """
-        Converts graph to a jsonable object
-        """
-        graph_dict = self.to_dict()
-        # convert all numpy objects to python
-        for node, attributes in graph_dict["nodes"].items():
-            for key, attribute in attributes.items():
-                if isinstance(attribute, np.integer):
-                    attributes[key] = int(attribute)
-                if isinstance(attribute, np.floating):
-                    attributes[key] = float(attribute)
-                if isinstance(attribute, np.ndarray) or isinstance(attribute, list):
-                    new_attribute = list(attribute)
-                    for i, value in enumerate(new_attribute):
-                        if isinstance(value, np.integer):
-                            new_attribute[i] = int(value)
-                        if isinstance(value, np.floating):
-                            new_attribute[i] = float(value)
-                    attributes[key] = new_attribute
-
-        cleaned_edges = []
-        for edge in graph_dict["edges"]:
-            new_edge = [int(edge[0]), int(edge[1])]
-            cleaned_edges.append(new_edge)
-
-        graph_dict["edges"] = cleaned_edges
-        graph_json = json.dumps(graph_dict)
-        return graph_json
-
-    @classmethod
-    def from_json_string(cls, graph_string: str):
-        """
-        Converts from a json string to a BifurcationGraph
-        """
-        graph_dict = json.loads(graph_string)
-        new_graph = cls.from_dict(graph_dict)
-        return new_graph
 
 
 class ElfAnalyzerToolkit:
@@ -223,18 +43,14 @@ class ElfAnalyzerToolkit:
         ignore_low_pseudopotentials: bool = False,
         downscale_resolution: int = 1200,
     ):
-        # If the grid is a higher resolution than desired, downscale it
-        self.unscaled_elf_grid = elf_grid.copy()
-        self.unscaled_charge_grid = charge_grid.copy()
-        if downscale_resolution is not None:
-            if elf_grid.voxel_resolution > downscale_resolution:
-                elf_grid = elf_grid.regrid(downscale_resolution, order=5)
-                charge_grid = charge_grid.regrid(downscale_resolution, order=5)
-
         self.elf_grid = elf_grid.copy()
         self.charge_grid = charge_grid.copy()
         self.directory = directory
         self.ignore_low_pseudopotentials = ignore_low_pseudopotentials
+        if downscale_resolution is not None:
+            self.downscale_resolution = downscale_resolution
+        else:
+            self.downscale_resolution = elf_grid.voxel_resolution
         # check if this is a spin polarized calculation and if the user wants
         # to pay attention to this.
         if elf_grid.is_spin_polarized and separate_spin:
@@ -243,18 +59,10 @@ class ElfAnalyzerToolkit:
             self._charge_grid_up, self._charge_grid_down = charge_grid.split_to_spin(
                 "charge"
             )
-            self._unscaled_elf_grid_up, self._unscaled_elf_grid_down = (
-                self.unscaled_elf_grid.split_to_spin()
-            )
-            self._unscaled_charge_grid_up, self._unscaled_charge_grid_down = (
-                self.unscaled_charge_grid.split_to_spin("charge")
-            )
         else:
             self.spin_polarized = False
             self._elf_grid_up, self._elf_grid_down = None, None
             self._charge_grid_up, self._charge_grid_down = None, None
-            self._unscaled_elf_grid_up, self._unscaled_elf_grid_down = None, None
-            self._unscaled_charge_grid_up, self._unscaled_charge_grid_down = None, None
 
     @property
     def structure(self) -> Structure:
@@ -349,28 +157,6 @@ class ElfAnalyzerToolkit:
         # return the en difference and number of neighbors
         return max_en_diff, len(neigh_list)
 
-    # !!! The following code has been replaced by radii determined directly from
-    # the ELF
-    # def get_atom_radius_guess(self, site: int) -> float:
-    #     atom_element = self.structure.species[site].element
-    #     en_diff, neigh_num = self.get_atom_en_diff_and_cn(site)
-    #     # The cutoff we use for ionic vs. covalent is arbitrary. It would be
-    #     # worthwile to study a range of EN differences and see where covalent
-    #     # bonds start to show up.
-    #     ionic_en_cutoff = 1.6
-    #     if abs(en_diff) < ionic_en_cutoff:
-    #         # use covalent radius
-    #         radius = atom_element.atomic_radius
-    #     else:
-    #         # use average ionic radius. We can guess if the atom is cationic
-    #         # vs anionic using the EN difference. EN diff will be positive if
-    #         # site is more EN than neighbors, meaning its an anion.
-    #         if en_diff > 0:
-    #             radius = atom_element.average_anionic_radius
-    #         else:
-    #             radius = atom_element.average_cationic_radius
-    #     return radius
-
     @property
     def site_voxel_coords(self) -> np.array:
         frac_coords = self.structure.frac_coords
@@ -406,127 +192,15 @@ class ElfAnalyzerToolkit:
             return self._elf_grid_down.run_pybader(threads)
         else:
             return None
-
-    def get_atoms_in_volume(self, volume_mask):
-        """
-        Checks if an atom is within this volume. This only checks the
-        area immediately around the atom, so outer core basins may not
-        be caught by this.
-        """
-        atom_values = []
-        for atom_idx, atom_coords in enumerate(self.site_voxel_coords):
-            site_value = volume_mask[atom_coords[0], atom_coords[1], atom_coords[2]]
-            if site_value:
-                atom_values.append(atom_idx)
-        return atom_values
-
-    def get_atoms_surrounded_by_volume(self, mask, return_type: bool = False):
-        """
-        Checks if a list of basins completely surround any of the atoms
-        in the structure. This method uses scipy's ndimage package to
-        label features in the grid combined with a supercell to check
-        if atoms identical through translation are connected.
-        """
-        # first we get any atoms that are within the mask itself. These won't be
-        # found otherwise because they will always sit in unlabeled regions.
-        structure = np.ones([3, 3, 3])
-        dilated_mask = binary_dilation(mask, structure)
-        init_atoms = self.get_atoms_in_volume(dilated_mask)
-        # Now we create a supercell of the mask so we can check connections to
-        # neighboring cells. This will be used to check if the feature connects
-        # to itself in each direction
-        # supercell_mask = self.elf_grid.get_2x_supercell(mask)
-        dilated_supercell_mask = self.elf_grid.get_2x_supercell(dilated_mask)
-        # We also get an inversion of this mask. This will be used to check if
-        # the mask surrounds each atom. To do this, we use the dilated supercell
-        # We do this to avoid thin walls being considered connections
-        # in the inverted mask
-        inverted_mask = dilated_supercell_mask == False
-        # Now we use use scipy to label unique features in our masks
-
-        # feature_supercell = Grid.label(supercell_mask, structure)
-        inverted_feature_supercell = Grid.label(inverted_mask, structure)
-        # First we check for feature connectivity. If we have 8 unique features,
-        # we have a feature that doesn't extend infinitely
-        # inf_feature = False
-        # if len(np.unique(feature_supercell)) != 9:
-        #     inf_feature = True
-
-        # if an atom was fully surrounded, it should sit inside one of our labels.
-        # The same atom in an adjacent unit cell should have a different label.
-        # To check this, we need to look at the atom in each section of the supercell
-        # and see if it has a different label in each.
-        # Similarly, if the feature is disconnected from itself in each unit cell
-        # any voxel in the feature should have different labels in each section.
-        # If not, the feature is connected to itself in multiple directions and
-        # must surround many atoms.
-        transformations = np.array(
-            [
-                [0, 0, 0],  # -
-                [1, 0, 0],  # x
-                [0, 1, 0],  # y
-                [0, 0, 1],  # z
-                [1, 1, 0],  # xy
-                [1, 0, 1],  # xz
-                [0, 1, 1],  # yz
-                [1, 1, 1],  # xyz
-            ]
-        )
-        # Check each atom to determine how many atoms it surrounds
-        surrounded_sites = []
-        for i, site in enumerate(self.structure):
-            # Get the voxel coords of each atom in their equivalent spots in each
-            # quadrant of the supercell
-            frac_coords = site.frac_coords
-            transformed_coords = transformations + frac_coords
-            voxel_coords = self.elf_grid.get_voxel_coords_from_frac_full_array(
-                transformed_coords
-            ).astype(int)
-            # Get the feature label at each transformation. If the atom is not surrounded
-            # by this basin, at least some of these feature labels will be the same
-            features = inverted_feature_supercell[
-                voxel_coords[:, 0], voxel_coords[:, 1], voxel_coords[:, 2]
-            ]
-            if len(np.unique(features)) == 8:
-                # The atom is completely surrounded by this basin and the basin belongs
-                # to this atom
-                surrounded_sites.append(i)
-        surrounded_sites.extend(init_atoms)
-        surrounded_sites = np.unique(surrounded_sites)
-        types = []
-        for site in surrounded_sites:
-            if site in init_atoms:
-                types.append(0)
-            else:
-                types.append(1)
-        if return_type:
-            return surrounded_sites, types
-        return surrounded_sites
-
-    def check_if_infinite_feature(self, mask: NDArray) -> bool:
-        """
-        Checks if a feature extends infinitely in at least one direction
-        """
-        structure = np.ones([3, 3, 3])
-        # Now we create a supercell of the mask so we can check connections to
-        # neighboring cells. This will be used to check if the feature connects
-        # to itself in each direction
-        supercell_mask = self.elf_grid.get_2x_supercell(mask)
-        # Now we use use scipy to label unique features in our masks
-        feature_supercell = Grid.label(supercell_mask, structure)
-        # First we check for feature connectivity. If we have 8 unique features,
-        # we have a feature that doesn't extend infinitely
-        inf_feature = False
-        if len(np.unique(feature_supercell)) != 9:
-            inf_feature = True
-
-        return inf_feature
     
     def get_min_surface_dist(self, grid: Grid, mask: NDArray, bader, radius_refine_method) -> float:
         """
         Calculates the minimum distance from the maximum of a feature to
         the nearest edge of its basin
         """
+        #BUG: This doesn't seem to always return the same value for features that
+        # are in symmetrically identical sites.
+        
         # First we find the voxels that make up the edge of the feature. We erode
         # the edge around the feature, protecting those at the end of the array
         # with padding, then check where the original and erroded masks don't match
@@ -558,7 +232,6 @@ class ElfAnalyzerToolkit:
         closest_voxel = edge_voxel_coords[np.where(distances==shortest_distance)[0][0]]
         expansion = 1.1
         expanded_closest_voxel = max_vox_coord + (closest_voxel-max_vox_coord)*expansion
-        # breakpoint()
         label_grid = grid.copy()
         label_grid.total = bader.bader_volumes.copy()
         # # The true distance is somewhere between this point and our maximum.
@@ -597,17 +270,14 @@ class ElfAnalyzerToolkit:
         if self.spin_polarized:
             elf_grid = self._elf_grid_up
             charge_grid = self._charge_grid_up
-            unscaled_elf_grid = self._unscaled_elf_grid_up
         else:
             elf_grid = self.elf_grid
             charge_grid = self.charge_grid
-            unscaled_elf_grid = self.unscaled_elf_grid
         # Get either the spin up graph or combined spin graph
         graph_up = self._get_bifurcation_graph(
             self.bader_up,
             elf_grid,
             charge_grid,
-            unscaled_elf_grid,
             **cutoff_kwargs,
         )
         if self.spin_polarized:
@@ -625,299 +295,172 @@ class ElfAnalyzerToolkit:
                     self.bader_down,
                     self._elf_grid_down,
                     self._charge_grid_down,
-                    self._unscaled_elf_grid_down,
                     **cutoff_kwargs,
                 )
             return graph_up, graph_down
         else:
             # We don't use spin polarized, so return the one graph.
             return graph_up
-    
-    def _get_connected_basins(
-            self,
-            basin_voxel_coords,
-            basin_labeled_voxels,
-            neighborhood: float=None
-            ):
-        # breakpoint()
-        # We want to keep track of which features are connected to each other
-        unique_connections = [[] for i in range(len(np.unique(basin_labeled_voxels)))]
-        # padded_basin_labeled_voxels = np.pad(basin_labeled_voxels,1,"wrap")
         
-        if neighborhood is None:
-            neighborhood = self.elf_grid.max_voxel_dist*2
-        transforms = self.elf_grid.get_voxels_transformations_to_radius(neighborhood)
-        for coords in basin_voxel_coords:
-            transformed_coords = transforms + coords
-            transformed_coords[:,0] %= self.elf_grid.shape[0]
-            transformed_coords[:,1] %= self.elf_grid.shape[1]
-            transformed_coords[:,2] %= self.elf_grid.shape[2]
-            
-            t_view = transformed_coords.view([('', transformed_coords.dtype)] * transformed_coords.shape[1]).reshape(-1)
-            b_view = basin_voxel_coords.view([('', basin_voxel_coords.dtype)] * basin_voxel_coords.shape[1]).reshape(-1)
-            
-            # Find which rows in transformed_coords are also in basin_voxel_coords
-            mask = np.isin(t_view, b_view)
-            # matching_indices_transformed = np.where(mask)[0]
-            
-            # Find corresponding indices in basin_voxel_coords
-            matching_indices_basin = np.array([np.where(b_view == t)[0][0] for t in t_view[mask]])
-            connected_features = list(np.unique(matching_indices_basin))
-            
-            # Final result: list of matching index pairs
-            # matches = list(zip(matching_indices_transformed, matching_indices_basin))
-            
-            # padded_coords = coords + 1
-            # i,j,k = padded_coords
-            # nearby_labels = padded_basin_labeled_voxels[i-1:i+2, j-1:j+2, k-1:k+2]
-            # connected_features = list(np.unique(nearby_labels))
-            # Iterate over these features. If they exist in a connection that we
-            # already have, we want to extend the connection to include any other
-            # features in this super feature
-            for j in connected_features:
-
-                unique_connections[j].extend([k for k in connected_features if k != j])
-
-                unique_connections[j] = list(np.unique(unique_connections[j]))
-
-        # create set/list to keep track of which features have already been connected
-        # to others and the full list of connections
-        already_connected = set()
-        reduced_connections = []
-
-        # loop over each shared connection
-        for i in range(len(unique_connections)):
-            if i in already_connected:
-                # we've already done these connections, so we skip
-                continue
-            # create sets of connections to compare with as we add more
-            connections = set()
-            new_connections = set(unique_connections[i])
-            while connections != new_connections:
-                # loop over the connections we've found so far. As we go, add
-                # any features we encounter to our set.
-                connections = new_connections.copy()
-                for j in connections:
-                    already_connected.add(j)
-                    new_connections.update(unique_connections[j])
-            # If we found any connections, append them to our list of reduced connections
-            if connections:
-                reduced_connections.append(sorted(new_connections))
-        
-        return reduced_connections
-        
-    
-    def _get_important_elf_labels(
-            self,
-            bader,
-            elf_grid: Grid,
-            resolution: float = 0.0001,
+    def _get_important_elf_domains(
+        self,
+        elf_grid: Grid,
+        bader,
             ):
         """
-        Starting from the ELF values at each bader maxima, finds and
-        refines the bifurcation points using ndimage's label method.
+        Scans through each bader basin and determines when they connect
+        to the basins bordering them. Then determines the ELF values
+        at which there are topological changes to the ELF isosurface.
+        Returns a dictionary of ELF values and the basins in shared
+        domains at that value.
         """
-        # First, get the ELF grid we will be using
+        basin_labeled_voxels = bader.bader_volumes
+        padded_basin_labeled_voxels = np.pad(basin_labeled_voxels, 1, "wrap")
         elf_data = elf_grid.total
-        # Also get an array labeling which bader basin each voxel is assigned to
-        basin_labeled_voxels = bader.bader_volumes.copy()
-        # From the bader calculation, we have each of the maxima in the ELF. We
-        # want to find the ELF value at which bifurcations occur. The steps will
-        # go as follows:
-            # 1. Get a list of unique ELF values at bader maxima
-            # 2. Starting from the highest ELF value and moving down, check if
-            # the features corresponding to a given ELF max connect by the ELF
-            # value of the next highest maximum.
-            # 3. If No: Move to the next highest maximum
-            # 4. If Yes: Identify the highest ELF value at which a connection
-            # occurs. This becomes our new value for the next cycle
-        
-        # First we get a list of unique maxima
+
+        # get frac coords and elf at maxima
         basin_frac_coords = bader.bader_maxima_fractional
         basin_voxel_coords = elf_grid.get_voxel_coords_from_frac_full_array(basin_frac_coords).astype(int)
         basin_max_elf = elf_data[basin_voxel_coords[:,0],basin_voxel_coords[:,1],basin_voxel_coords[:,2]]
-        
-        # BUG: This results in combining metal maxima that should not be combined
-        connected_basins = self._get_connected_basins(basin_voxel_coords, basin_labeled_voxels)
-        important_max_elf = []
-        for connection in connected_basins:
-            elf_maxima = basin_max_elf[connection]
-            important_max_elf.append(elf_maxima.min())
-        
-        # get the unique maxima within a thousandth of each other. We always round up.
-        unique_maxima = np.unique(np.floor(np.array(important_max_elf)*10000)/10000)
-        # unique_maxima = np.unique(np.floor(np.array(basin_max_elf)*10000)/10000)
-        unique_maxima = np.insert(unique_maxima, 0, 0)
-        unique_maxima = np.append(unique_maxima, 1)
-        # create a dictionary to store labeled grids
-        labeled_grids = {}
-        # Now we get labeled grids for each elf max
-        for maximum in unique_maxima:
-            elf_mask = np.where(elf_data > maximum, True, False)
-            labeled_grid = elf_grid.label(elf_mask)
-            # Get the basins in each feature
-            basin_groups = []
-            features = np.unique(labeled_grid)
-            if 0 in features:
-                features = features[1:]
-            for feature in features:
-                feature_mask = labeled_grid == feature
-                basins = basin_labeled_voxels[feature_mask]
-                basin_groups.append(np.unique(basins))
-            labeled_grids[maximum] = {
-                "labeled_grid": labeled_grid,
-                "basin_groups": basin_groups,
-                "important": True,
-                }
-        
-        # Now we start our main while loop where we will search for bifurcation
-        # points
-        searched_values = []
-        while 0 not in searched_values:
-            possible_values = np.array([i for i in labeled_grids.keys()])
-            # Now we remove those we've already searched
-            possible_values = [i for i in possible_values if i not in searched_values]
-            # Now we get the highest of those remaining. We note that we've searched
-            # this by adding it to our searched values
-            max_elf = np.unique(possible_values)[-1]
-            searched_values.append(max_elf)
-            if max_elf == 0:
-                break
-            # And the next highest
-            next_elf = np.unique(possible_values)[-2]
+
+        # TODO: Use symmetry?
+
+        # for each basin, we will get the basins bordering it and find the
+        # point at which these two basins would bifurcate
+        completed_basins = [] # To avoid repeats
+        connection_elfs = []
+        connection_basins = []
+        edges = []
+        for basin in range(len(basin_frac_coords)):
+            # Note that we've done this basin
+            completed_basins.append(basin)
+            # Get a mask representing where this basin is as well as the voxel indices
+            basin_mask = np.isin(basin_labeled_voxels, basin)
+            basin_voxels = np.argwhere(basin_mask)
+            # Get the ELf values at this basin
+            basin_elf = np.where(basin_mask, elf_data,0)
+            padded_basin_elf = np.pad(basin_elf, 1, "wrap")
+            padded_basin_voxels = basin_voxels + 1
+            # Make an empty edge mask. we will use this to mark the edges as we
+            # find them
+            edge_mask = np.zeros(basin_mask.shape)
+
+            # We want the voxels bordering this basin. To get these, we can check the
+            # value of the voxels neighboring each voxel and see if it doesn't match
+            # the same label
+            # TODO: Move this to be done all at once rather than during the loop?
+            neighbors = set()
+            for transform in itertools.product([-1,0,1], repeat=3):
+                transformed_voxels = padded_basin_voxels + transform
+                values = padded_basin_labeled_voxels[transformed_voxels[:,0],transformed_voxels[:,1],transformed_voxels[:,2]]
+                diff_mask = np.isin(values, np.array(completed_basins), invert=True)
+                # diff_mask = values != basin
+                neighbors.update(np.unique(values[diff_mask]))
+                padded_voxel_indices = transformed_voxels[np.where(values != basin)[0]]
+                voxel_indices = padded_voxel_indices - 1
+                # wrap the voxels and label them as edges in our edge mask
+                voxel_indices[:,0] %= basin_mask.shape[0]
+                voxel_indices[:,1] %= basin_mask.shape[1]
+                voxel_indices[:,2] %= basin_mask.shape[2]
+                edge_mask[voxel_indices[:,0],voxel_indices[:,1],voxel_indices[:,2]] = 1
+
+            # For each neighboring basin, we want to get the highest ELF value at which
+            # it first connects to this basin. For each edge point we will generate a list
+            # of ELF values corresponding to the value at this point and the values at
+            # adjacent points. The point at which this voxel connects to our current basin
+            # is then the second highest ELF value in this list. The connection point is
+            # the highest of all of the resulting second highest ELF values.
             
-            # We want to compare the basin groups in our current max elf value
-            # to the basin groups of the next highest elf.
-            initial_basin_groups = labeled_grids[max_elf]["basin_groups"]
-            final_basin_groups = labeled_grids[next_elf]["basin_groups"]
-            # If all of our basin groups are found exactly in the next set of
-            # basin groups we continue. Otherwise we will initialize a search
-            all_groups_present = True
-            for group in initial_basin_groups:
-                if not any(np.array_equal(group, other_group) for other_group in final_basin_groups):
-                    all_groups_present = False
-                    break
-            if all_groups_present:
-                continue
+            # Get the voxel coords for this basins edges
+            edge_voxels = np.argwhere(edge_mask==1)
+            # Get the initial elf centered at these edge voxels
+            elf = elf_data[edge_voxels[:,0],edge_voxels[:,1],edge_voxels[:,2]]
+            edge_neigh_values = [elf]
+            # Next we'll transform the voxels to their 27 neighbors and get the
+            # corresponding elf values. Note we only get elf values for voxels
+            # that are part of the current basin. Everything else returns 0
+            padded_edge_voxels = edge_voxels + 1
+            for transform in itertools.product([-1,0,1], repeat=3):
+                transformed_voxels = padded_edge_voxels + np.array(transform)
+                elf = padded_basin_elf[transformed_voxels[:,0],transformed_voxels[:,1],transformed_voxels[:,2]]
+                edge_neigh_values.append(elf)
+            edge_neigh_values = np.column_stack(edge_neigh_values)
+            # Now we want the second highest Elf value from each row.
+            second_highest = np.partition(edge_neigh_values, -2, axis=1)[:, -2]
             
-            # One of our groups of basins no longer exists. Because we are moving
-            # downwards, this means our group of basins has merged with another.
-            # We want to find the highest ELF value at which this change occurs
-            current_elf = next_elf
-            delta = (max_elf-next_elf)/2
-            position = -1 # -1 is below 1 is above
-            while delta > resolution:
-                # adjust our current elf value
-                if position == -1:
-                    current_elf += delta
-                else:
-                    current_elf -= delta
-                # round the current elf to fix rounding errors
-                current_elf = round(current_elf, 8)
-                # get the labeled values at the current elf value
-                elf_mask = np.where(elf_data > current_elf, True, False)
-                labeled_grid = elf_grid.label(elf_mask)
-                # Get the basins in each feature
-                current_basin_groups = []
-                for feature in np.unique(labeled_grid)[1:]:
-                    feature_mask = labeled_grid == feature
-                    basins = basin_labeled_voxels[feature_mask]
-                    current_basin_groups.append(np.unique(basins))
-                # Save this labeled grid to our dictionary. We assume this is
-                # not our bifurcation point for now.
-                labeled_grids[current_elf] = {
-                    "labeled_grid": labeled_grid,
-                    "basin_groups": current_basin_groups,
-                    "important": False,
-                    }
-                # Now we check if this labeled grid has all of the important groups present
-                all_groups_present = True
-                for group in initial_basin_groups:
-                    if not any(np.array_equal(group, other_group) for other_group in current_basin_groups):
-                        all_groups_present = False
-                        break
-                # Now we adjust our elf value and information based on the result
-                if all_groups_present:
-                    # We are above the desired value
-                    position = 1
-                else:
-                    # We are below the desired value
-                    position = -1
-                # adjust delta for next cycle
-                delta /= 2
-            # If we've made it here, the current elf value is a bifurcation point.
-            # However, we want to make sure we are slightly above the actual ELF
-            # value so that the next part of the algorithm works properly. To
-            # get this, we check if we are below the value and if so we add the
-            # previous delta to get a new labeled grid
-            if position == -1:
-                current_elf += delta*2
-                current_elf = round(current_elf, 8)
-                # Check if this elf already exists
-                if labeled_grids.get(current_elf, None) is None:
-                    # get the labeled values at the current elf value
-                    elf_mask = np.where(elf_data > current_elf, True, False)
-                    labeled_grid = elf_grid.label(elf_mask)
-                    # Get the basins in each feature
-                    current_basin_groups = []
-                    for feature in np.unique(labeled_grid)[1:]:
-                        feature_mask = labeled_grid == feature
-                        basins = basin_labeled_voxels[feature_mask]
-                        current_basin_groups.append(np.unique(basins))
-                    # Save this labeled grid to our dictionary. We assume this is
-                    # not our bifurcation point for now.
-                    labeled_grids[current_elf] = {
-                        "labeled_grid": labeled_grid,
-                        "basin_groups": current_basin_groups,
-                        }
-            # label this elf value as important
-            labeled_grids[current_elf]["important"] = True
+            # For each neighbor, we want to find the edge voxel that had the highest
+            # connecting neighbor, corresponding to the value at which this neighbor basin would
+            # connect to the current basin.
+            edge_labels = basin_labeled_voxels[edge_voxels[:,0],edge_voxels[:,1],edge_voxels[:,2]]
+            neighbor_connection_values = []
+            for neighbor in neighbors:
+                neighbor_indices = np.where(edge_labels==neighbor)[0]
+                neighbor_values = second_highest[neighbor_indices]
+                neighbor_connection_values.append(neighbor_values.max())
+            
+            # convert neighbors and values to arrays and insert values corresponding
+            # to the current basin at the beginning.
+            neighbors = np.array(list(neighbors))
+            neighbor_connection_values = np.array(neighbor_connection_values)
+            neighbors = np.insert(neighbors,0,basin)
+            neighbor_connection_values = np.insert(neighbor_connection_values,0,basin_max_elf[basin])
+            
+            connection_basins.extend([[basin,i] for i in neighbors])
+            connection_elfs.extend(neighbor_connection_values)
+            edges.append(np.argwhere(edge_mask==1))
+
+        # convert the connections to arrays for easy iteration
+        connection_basins = np.array(connection_basins)
+        connection_elfs = np.array(connection_elfs)
         
-        # Now we have a dictionary of labeled grids and we've marked which are
-        # important (bifurcations or maxima). We get a reduced dictionary of
-        # only the important ones
-        important_labeled_grids = {}
-        for key, value in labeled_grids.items():
-            if value["important"] == True:
-                important_labeled_grids[key] = value
-        return important_labeled_grids
-        # breakpoint()
-        # Finally, we want to make sure we don't reduce any of the domains that
-        # separate due to voxelation. We iterate over our lists of basin groups
-        # and remove any that are subsets of a connection
-        # for key, value in important_labeled_grids.items():
-        #     basin_groups = value["basin_groups"]
-        #     new_basin_groups = []
-        #     for group in basin_groups:
-        #         # check each set of connected basins.
-        #         is_subset = False
-        #         for connection in connected_basins:
-        #             if np.all(np.isin(group, connection)) and len(group) < len(connection):
-        #                 is_subset = True
-        #                 break
-        #         if not is_subset:
-        #             new_basin_groups.append(group)
-        #     important_labeled_grids[key]["basin_groups"] = new_basin_groups
-        
-        # # remove any entries with no basin groups that may have resulted from
-        # # the previous reduction
-        # final_labeled_grids = {}
-        # for key, value in important_labeled_grids.items():
-        #     if len(value["basin_groups"]) == 0 and key != 1.0:
-        #         continue
-        #     final_labeled_grids[key] = value
-        
-        # return final_labeled_grids
+        # Now we want to compile which domains exist at each elf value and the
+        # basins they contain. We will scan over each maximum and connection
+        # point and see if there is a change in domains
+        possible_elf_values = list(np.unique(connection_elfs))
+        possible_elf_values.reverse()
+        # For each elf value, starting from the highest, we check which basins are connected
+        # to each other to form a domain.
+        important_values = {}
+        # Add the value at the ELF slightly above where the last basin disappears
+        # important_values[possible_elf_values[0]+0.01] = [set()]
+        # connected_components = [set()]
+        connected_components = []
+        for elf_value in possible_elf_values:
+            # Find the indices where connections are above the current value
+            elf_indices = np.where(connection_elfs>=elf_value)[0]
+            # get the connected basins
+            connected_basins = connection_basins[elf_indices]
+            uf = UnionFind()
+            for a, b in connected_basins:
+                uf.union(a,b)
+            # Get the previous and current groups
+            previous_connected = connected_components.copy()
+            connected_components = uf.groups()
+            # Check that this list of sets is different from the previous one
+            if not {frozenset(s) for s in previous_connected} == {frozenset(s) for s in connected_components}:
+                important_values[elf_value] = connected_components
+        # Our basins are in sets currently, but we want them to be arrays for operations
+        # down the line. We convert them here
+        important_values_new = {}
+        for key, value in important_values.items():
+            important_values_new[key] = [np.array(list(i)).astype(int) for i in value]
+        important_values = important_values_new
+        return important_values
     
-    def _get_initial_graph(self, important_labeled_grids) -> BifurcationGraph():
-        """
-        Constructs an initial BifurcationGraph from a dictionary with
-        keys of important ELF values and values of sub dictionaries
-        containing labeled grids and other useful information
-        """
-        # initialize our graph
+    def _get_initial_graph(
+            self,
+            important_values: dict
+            ):
+        # Now that we have our elf values where changes occur, we want to generate our
+        # initial graph
         graph = BifurcationGraph()
-        current_basin_groups = important_labeled_grids[0]["basin_groups"]
+        # The elf values where topological changes happen are noted by the keys
+        # of our dictionary
+        keys = np.unique([i for i in important_values.keys()])
+        # Our initial domain contains all of the basins and is stored in the
+        # lowest key. We add this to our graph to avoid issues later in processing
+        # due to it being the root.
+        current_basin_groups = important_values[keys[0]]
         graph.add_node(1)
         networkx.set_node_attributes(
             graph,
@@ -925,13 +468,13 @@ class ElfAnalyzerToolkit:
             )
         # Now we loop over the ELF values at which bifurcations occur or maxima
         # exist
-        keys = np.unique([i for i in important_labeled_grids.keys()])
-        
         node_count = 1
         for key in keys[1:]:
+            # Get the current and previous groups for comparison
             previous_basin_groups = current_basin_groups.copy()
-            current_basin_groups = important_labeled_grids[key]["basin_groups"]
+            current_basin_groups = important_values[key]
             for basin_group in current_basin_groups:
+                basin_group = basin_group
                 # we check if this basin group exists in the previous one. If it
                 # does, we've already added a node for this group and continue
                 old_group = any(np.array_equal(basin_group, other_group) for other_group in previous_basin_groups)
@@ -960,15 +503,13 @@ class ElfAnalyzerToolkit:
                 graph.add_edge(parent_node, node_count)
                 networkx.set_node_attributes(graph,{node_count: {"basins": basin_group}})
         return graph
-                
     
     def _get_bifurcation_graph(
         self,
         bader,
         elf_grid: Grid,
         charge_grid: Grid,
-        unscaled_elf_grid: Grid,
-        resolution: float = 0.0001,
+        resolution: float = 0.001,
         shell_depth: float = 0.05,
         combine_shells: bool = True,
         min_covalent_charge: float = 0.6,
@@ -991,21 +532,36 @@ class ElfAnalyzerToolkit:
         This method is largely meant to be called through the get_bifurcation_graphs
         method.
         """
-        # First, get the ELF grid we will be using
-        elf_data = elf_grid.total
+        logging.info(
+            "Generating initial bifurcation graph."
+            )
         # Also get an array labeling which bader basin each voxel is assigned to
         basin_labeled_voxels = bader.bader_volumes.copy()
+
+        # We will use a downscaled version of our ELF for speed
+        downscale_resolution = self.downscale_resolution
+        if elf_grid.voxel_resolution > downscale_resolution:
+            downscaled_elf_grid = elf_grid.regrid(downscale_resolution)
+            label_grid = elf_grid.copy()
+            label_grid.total = basin_labeled_voxels
+            downscaled_label_grid = label_grid.regrid(downscale_resolution, order=0)
+        else:
+            downscaled_elf_grid = elf_grid.copy()
+            downscaled_label_grid = elf_grid.copy()
+            downscaled_label_grid.total = basin_labeled_voxels
+        downscaled_basin_labeled_voxels = downscaled_label_grid.total
         
-        # get the important elf values and associated labeled grids
-        important_elf_grids = self._get_important_elf_labels(
-            bader=bader, 
+        # We don't use a downscaled ELF here to ensure that we find all possible
+        # maxima
+        important_elf_values = self._get_important_elf_domains(
             elf_grid=elf_grid,
-            resolution=resolution
+            bader=bader,
             )
         
         # get an initial graph connecting bifurcations and final basins
-        graph = self._get_initial_graph(important_elf_grids)
+        graph = self._get_initial_graph(important_values=important_elf_values)
         
+        logging.info("Labeling elf domains")
         # Now loop over this graph and label each node with important information
         for node_idx in graph.nodes:
             attributes = graph.nodes[node_idx]
@@ -1017,21 +573,21 @@ class ElfAnalyzerToolkit:
                 if parent_attributes is not None:
                     parent_split = parent_attributes["split"] - 0.01
                     basins = graph.nodes[node_idx]["basins"]
-                    low_elf_mask = np.isin(basin_labeled_voxels, basins) & np.where(
-                        elf_grid.total > parent_split, True, False
+                    low_elf_mask = np.isin(downscaled_basin_labeled_voxels, basins) & np.where(
+                        downscaled_elf_grid.total > parent_split, True, False
                     )
                     high_elf_mask = np.isin(
-                        basin_labeled_voxels, basins
+                        downscaled_basin_labeled_voxels, basins
                     ) & np.where(
-                        elf_grid.total > (attributes["split"] - 2 * 0.01), True, False
+                        downscaled_elf_grid.total > (attributes["split"] - 2 * 0.01), True, False
                     )
-                    atoms = self.get_atoms_surrounded_by_volume(low_elf_mask)
+                    atoms = downscaled_elf_grid.get_atoms_surrounded_by_volume(low_elf_mask)
                     # BUG-FIX we check if this feature is infinite right
                     # before it split. This should fix issues with atomic
                     # features in small cells that connect to themselves
                     # by wrapping around the cell. In a larger cell, the
                     # split would be noted, but it's not for these.
-                    is_infinite = self.check_if_infinite_feature(high_elf_mask)
+                    is_infinite = downscaled_elf_grid.check_if_infinite_feature(high_elf_mask)
                 else:
                     # if we have no parent this is our first node and
                     # we have as many atoms as there are in the structure
@@ -1059,9 +615,12 @@ class ElfAnalyzerToolkit:
                 # We want to store data relavent to the type of domain it might
                 # be.
                 # First we get a mask representing where this feature is
-                basins = attributes["basins"]
-                basin_mask = np.where(np.isin(basin_labeled_voxels, basins), True, False)
-                max_elf = np.max(elf_data[basin_mask])
+                try:
+                    basins = attributes["basins"]
+                    basin_mask = np.where(np.isin(basin_labeled_voxels, basins), True, False)
+                    max_elf = np.max(elf_grid.total[basin_mask])
+                except:
+                    breakpoint()
                 split = parent_attributes["split"]
                 depth = round(max_elf - split, 4)
                 # We also want to mark a type of depth corresponding to the
@@ -1089,25 +648,6 @@ class ElfAnalyzerToolkit:
                     if len(empty_structure) > 1:
                         empty_structure.merge_sites(tol=1, mode="average")
                     frac_coord = empty_structure.frac_coords[0]
-                refined_frac_coord = unscaled_elf_grid.get_maxima_near_frac_coord(
-                    frac_coord,
-                    neighbor_size=2
-                )
-                # Check that we haven't moved very far from our starting point.
-                # If we have, we try reducing the neighbor size
-                # We use cartesian coordinates and the maximum voxel distance
-                cart_coord = elf_grid.get_cart_coords_from_frac(frac_coord)
-                refined_cart_coord = elf_grid.get_cart_coords_from_frac(refined_frac_coord)
-                if math.dist(cart_coord, refined_cart_coord) > elf_grid.max_voxel_dist:
-                    refined_frac_coord = unscaled_elf_grid.get_maxima_near_frac_coord(
-                        frac_coord,
-                        neighbor_size=1
-                    )
-                    refined_cart_coord = elf_grid.get_cart_coords_from_frac(refined_frac_coord)
-                # Again check that we haven't moved too far from our starting point.
-                # If we haven't, we override our frac coord with the refined one
-                if not math.dist(cart_coord, refined_cart_coord) > elf_grid.max_voxel_dist:
-                    frac_coord = refined_frac_coord
 
                 # Using these basins, we create a mask representing the full
                 # basin (not just above this elf value) and integrate the
@@ -1138,7 +678,7 @@ class ElfAnalyzerToolkit:
                             "3d_depth": depth_3d,
                             "charge": charge,
                             "volume": volume,
-                            "atom_distance": distance,
+                            "atom_distance": round(distance, 4),
                             "nearest_atom": nearest_atom,
                             "nearest_atom_type": self.structure[nearest_atom].specie.symbol,
                             "frac_coords": frac_coord,
@@ -1146,353 +686,18 @@ class ElfAnalyzerToolkit:
                     },
                 )
         
-        # # create a graph with a base node to start tracking features
-        # graph = BifurcationGraph()
-        # graph.add_node(1, subset=1)
-        # # # create an initial featured grid representing an ELF cutoff of 0
-        # featured_grid = np.ones(elf_grid.shape)
-        # # keep track of the total number of labels we've had throughout the
-        # # process. We use this to keep track of previous nodes
-        # total_features = 1
-        # for cutoff, info in important_elf_grids.items():
-        #     # copy previous features
-        #     old_featured_grid = featured_grid.copy()
-        #     featured_grid = info["labeled_grid"]
-        #     # make sure we have at least one label at low ELF cutoffs
-        #     if (
-        #         len(np.unique(featured_grid)) == 1
-        #         and len(np.unique(old_featured_grid)) == 1
-        #     ):
-        #         if np.unique(featured_grid)[0] == 0:
-        #             featured_grid = old_featured_grid.copy()
-        #             continue
-        #     # Check if we have the exact same array as before and if so, skip
-        #     if np.array_equal(featured_grid, old_featured_grid):
-        #         continue
-        #     # We use values of 1 and up to assign nodes. We don't want to accidentally
-        #     # overwrite these so we subtract the length of unique features to
-        #     # make all of our values 0 and below
-        #     unique_old_labels = np.unique(old_featured_grid)
-        #     unique_new_labels = np.unique(featured_grid)
-        #     old_len = len(unique_old_labels)
-        #     new_len = len(unique_new_labels)
-        #     featured_grid -= new_len
-        #     unique_new_labels -= new_len
-
-        #     # Prior to decreasing our values, 0 referred to areas with no feature.
-        #     # We don't want to consider these regions so we remove them from
-        #     # our unique lists
-        #     if -old_len in unique_old_labels:
-        #         unique_old_labels = unique_old_labels[1:]
-        #     if -new_len in unique_new_labels:
-        #         unique_new_labels = unique_new_labels[1:]
-
-        #     if len(unique_old_labels) == 0:
-        #         # we have no more features and are done so we break
-        #         break
-
-        #     # Now we want to loop over previous features and see which one(s)
-        #     # split into multiple new features. As features split or dissapear
-        #     # we label them with useful information
-        #     for feature in unique_old_labels:
-        #         mask = old_featured_grid == feature
-        #         new_features = featured_grid[mask]
-        #         features_list = np.unique(new_features)
-        #         # get the node attributes corresponding to this old feature
-        #         parent_idx = graph.parent_index(feature)
-        #         all_parent_indices = graph.deep_parent_indices(feature)
-        #         parent = graph.parent_dict(feature)
-        #         # remove 0
-        #         if -new_len in features_list:
-        #             features_list = features_list[1:]
-        #         # remove any positive assignments from previous split (caused by
-        #         # error in labeling)
-        #         # features_list = np.array([f for f in features_list if f < 0])
-        #         if len(features_list) == 0:
-        #             # This feature was irreducible and just disappeared.
-        #             # We want to assign the feature to be atomic or valent and
-        #             # then store information that might be relavent to the type
-        #             # of basin it is.
-        #             # First we get easy information such as the max ELF and depth
-        #             # of the feature
-        #             max_elf = round(np.max(elf_data[mask]), 2)
-        #             split = parent["split"]
-        #             depth = round(max_elf - split, 2)
-        #             # We also want to mark a type of depth corresponding to the
-        #             # point where this feature connected with an infinite domain.
-        #             for idx in all_parent_indices:
-        #                 current_parent = graph.nodes[idx]
-        #                 if current_parent["atom_num"] == -1:
-        #                     infinite_split = current_parent["split"]
-        #                     break
-        #             depth_3d = round(max_elf - infinite_split, 2)
-        #             # Now we get the basins that belong to this feature.
-        #             # NOTE: there may be more than one if the depth of the basin is
-        #             # smaller than the resolution
-        #             basins = graph.nodes[feature]["basins"]
-        #             # Using this, we can find the average frac coords of the attractors
-        #             # in this basin
-        #             empty_structure = self.structure.copy()
-        #             empty_structure.remove_oxidation_states()
-        #             empty_structure.remove_species(empty_structure.symbol_set)
-        #             frac_coords = bader.bader_maxima_fractional[basins]
-        #             if len(frac_coords) == 1:
-        #                 frac_coord = frac_coords[0]
-        #             else:
-        #                 # We append these to an empty structure and use pymatgen's
-        #                 # merge method to get their average position
-        #                 for frac_coord in frac_coords:
-        #                     empty_structure.append("He", frac_coord)
-        #                 if len(empty_structure) > 1:
-        #                     empty_structure.merge_sites(tol=1, mode="average")
-        #                 frac_coord = empty_structure.frac_coords[0]
-        #             refined_frac_coord = unscaled_elf_grid.get_maxima_near_frac_coord(
-        #                 frac_coord,
-        #                 neighbor_size=2
-        #             )
-        #             # Check that we haven't moved very far from our starting point.
-        #             # If we have, we try reducing the neighbor size
-        #             # We use cartesian coordinates and the maximum voxel distance
-        #             cart_coord = elf_grid.get_cart_coords_from_frac(frac_coord)
-        #             refined_cart_coord = elf_grid.get_cart_coords_from_frac(refined_frac_coord)
-        #             if math.dist(cart_coord, refined_cart_coord) > elf_grid.max_voxel_dist:
-        #                 refined_frac_coord = unscaled_elf_grid.get_maxima_near_frac_coord(
-        #                     frac_coord,
-        #                     neighbor_size=1
-        #                 )
-        #                 refined_cart_coord = elf_grid.get_cart_coords_from_frac(refined_frac_coord)
-        #             # Again check that we haven't moved too far from our starting point.
-        #             # If we haven't, we override our frac coord with the refined one
-        #             if not math.dist(cart_coord, refined_cart_coord) > elf_grid.max_voxel_dist:
-        #                 frac_coord = refined_frac_coord
-
-        #             # Using these basins, we create a mask representing the full
-        #             # basin (not just above this elf value) and integrate the
-        #             # charge in this region. We also save the volume here
-        #             charge_mask = np.isin(basin_labeled_voxels, basins)
-        #             charge = round(
-        #                 charge_grid.total[charge_mask].sum() / charge_grid.shape.prod(),
-        #                 2,
-        #             )
-        #             volume = round(
-        #                 len(np.where(charge_mask)[0]) * elf_grid.voxel_volume, 2
-        #             )
-        #             # We can also get the distance of this feature to the nearest
-        #             # atom and what that atom is. We have to assume we have several
-        #             # basins, so we use the shortest distance and corresponding ato
-        #             distances = bader.bader_distance[basins]
-        #             distance = distances.min()
-        #             nearest_atom = bader.bader_atoms[basins][
-        #                 np.where(distances == distance)[0][0]
-        #             ]
-
-        #             # Now we update this node with the information we gathered
-        #             networkx.set_node_attributes(
-        #                 graph,
-        #                 {
-        #                     feature: {
-        #                         "max_elf": max_elf,
-        #                         "depth": depth,
-        #                         "3d_depth": depth_3d,
-        #                         "charge": charge,
-        #                         "volume": volume,
-        #                         "atom_distance": distance,
-        #                         "nearest_atom": nearest_atom,
-        #                         "nearest_atom_type": self.structure[nearest_atom].specie.symbol,
-        #                         "frac_coords": frac_coord,
-        #                     }
-        #                 },
-        #             )
-
-        #         elif len(features_list) == 1:
-        #             # This typically means we have the same topological feature
-        #             # as before. There is occassionally a bug with the feature
-        #             # finder at low grid densities where a feature is found and
-        #             # then disapears in later rounds. In these cases, the incorrect
-        #             # feature will eventually include labels from other correct
-        #             # labels. (e.g. default Ti metal using vasp from matproj).
-        #             # From what I can tell, we should be able to remove those here
-        #             if features_list[0] > 0:
-        #                 # make sure the parent hasn't already been removed due to
-        #                 # this same process for a different feature
-        #                 if parent is not None:
-        #                     num = parent["num"] - 1
-        #                     # atoms = parent["atoms"]
-        #                     if num == 1:
-        #                         # this node isn't useful anymore so we remove it
-        #                         graph.remove_node(parent_idx)
-        #                         # we also need to update the subset depth of all
-        #                         # of our existing nodes
-        #                         for node in graph.nodes:
-        #                             graph.nodes[node]["subset"] -= 1
-        #                     else:
-        #                         # we've changed the number of children for this node
-        #                         # so we update it
-        #                         networkx.set_node_attributes(
-        #                             graph, {parent_idx: {"num": num}}
-        #                         )
-        #                 # we don't want this node so we remove it
-        #                 graph.remove_node(feature)
-        #             else:
-        #                 # We have the same topological feature as before. Replace the
-        #                 # feature label with the previous one
-        #                 featured_grid = np.where(
-        #                     featured_grid == features_list[0], feature, featured_grid
-        #                 )
-        #         elif len(features_list) > 1:
-        #             # This feature has split and we want to add an attribute
-        #             # labeling it with the value it split at. We also want to
-        #             # record how many features it split into, the basins that
-        #             # are in this feature, and if there are any atoms contained
-        #             # in it. This info may be used later to categorize basin.
-
-        #             # Our current mask is the last point where this feature was
-        #             # distinct, but we want the point where it had the lowest
-        #             # ELF value while being distinct. This allows us to see if
-        #             # this feature fully surrounded an atom.
-        #             if parent is not None:
-        #                 parent_split = parent.get("split", None) - 0.01
-        #                 basins = graph.nodes[feature]["basins"]
-        #                 low_elf_mask = np.isin(basin_labeled_voxels, basins) & np.where(
-        #                     elf_grid.total > parent_split, True, False
-        #                 )
-        #                 high_elf_mask = np.isin(
-        #                     basin_labeled_voxels, basins
-        #                 ) & np.where(
-        #                     elf_grid.total > (cutoff - 2 * 0.01), True, False
-        #                 )
-        #                 atoms = self.get_atoms_surrounded_by_volume(low_elf_mask)
-        #                 # BUG-FIX we check if this feature is infinite right
-        #                 # before it split. This should fix issues with atomic
-        #                 # features in small cells that connect to themselves
-        #                 # by wrapping around the cell. In a larger cell, the
-        #                 # split would be noted, but it's not for these.
-        #                 is_infinite = self.check_if_infinite_feature(high_elf_mask)
-        #             else:
-        #                 # if we have no parent this is our first node and
-        #                 # we have as many atoms as there are in the structure
-        #                 atoms = [i for i in range(len(self.structure))]
-        #                 # This is always infinite, so we note that by adding -1
-        #                 # to the front of our list
-        #                 is_infinite = True
-        #                 # Initialize the basins for the first node
-        #                 networkx.set_node_attributes(graph, {feature: {
-        #                     "basins": np.array([i for i in range(len(bader.bader_maxima))])
-        #                     }}
-        #                     )
-                        
-        #             # If the volume surrounds infinite atoms, the first atom
-        #             # returned will be a -1. We check for this
-        #             # TODO: Currently, an atom_num of -1 indicates an infinite
-        #             # feature, but it would be useful to instead indicate this
-        #             # as a separate key. So we would have the surrounded atoms,
-        #             # the number of surrounded atoms, and whether the feature is
-        #             # infinite or not.
-        #             atom_num = len(atoms)
-        #             if is_infinite:
-        #                 atom_num = -1
-        #             networkx.set_node_attributes(
-        #                 graph,
-        #                 {
-        #                     feature: {
-        #                         "split": cutoff,
-        #                         "num": len(features_list),
-        #                         "atoms": atoms,
-        #                         "atom_num": atom_num,
-        #                     }
-        #                 },
-        #             )
-        #             # We have new features and we want to label them as such
-        #             # BUG-FIX: Sometimes a basin will bifurcate and disappear within
-        #             # the same step due to the resolution being too high. Generally
-        #             # this means the basin was extremely shallow. We check for
-        #             # these and assign them to the nearest feature
-        #             # First we get a list of the new features and their current basins
-        #             new_features = []
-        #             all_new_basins = []
-        #             new_basins_per_feature = []
-                    
-        #             # Collect new basins for each feature
-        #             for new_feature in features_list:
-        #                 mask = featured_grid == new_feature
-        #                 basins = np.unique(basin_labeled_voxels[mask])
-        #                 new_basins_per_feature.append(np.array(basins))
-        #                 all_new_basins.extend(basins)
-                    
-        #                 total_features += 1
-        #                 new_features.append(total_features)
-                    
-        #             old_basins = graph.nodes[feature]["basins"]
-
-                    
-        #             # Add missing old basins if necessary
-        #             if len(all_new_basins) != len(old_basins):
-        #                 # Prepare empty structure to measure distances
-        #                 empty_structure = self.structure.copy()
-        #                 empty_structure.remove_oxidation_states()
-        #                 empty_structure.remove_species(empty_structure.symbol_set)
-                    
-        #                 # Place old basin maxima into structure
-        #                 frac_coords = bader.bader_maxima_fractional[old_basins]
-        #                 new_basin_sites = []
-        #                 for i, (old_basin, coord) in enumerate(zip(old_basins, frac_coords)):
-        #                     if old_basin in all_new_basins:
-        #                         new_basin_sites.append(i)
-        #                     empty_structure.append("H", coord)
-                    
-        #                 new_basin_sites = np.unique(new_basin_sites)
-        #                 distances = empty_structure.distance_matrix
-                    
-        #                 # Assign missing old basins to closest feature group
-        #                 updated_basins = [list(basins) for basins in new_basins_per_feature]
-        #                 for i, old_basin in enumerate(old_basins):
-        #                     if old_basin in all_new_basins:
-        #                         continue
-        #                     min_dist = distances[i][new_basin_sites].min()
-        #                     min_idx = np.where(distances[i]==min_dist)[0][0]
-        #                     nearest_basin = old_basins[min_idx]
-        #                     for j, new_basins in enumerate(new_basins_per_feature):
-        #                         if nearest_basin in new_basins:
-        #                             updated_basins[j].append(old_basin)                    
-        #                 # Convert back to numpy arrays
-        #                 new_basins_per_feature = [np.array(basins) for basins in updated_basins]
-
-        #             # Now we loop over our new features and add them to our graph
-        #             for new_feat, feat_label, basins in zip(features_list, new_features, new_basins_per_feature):
-        #                 # relabel feature
-        #                 featured_grid = np.where(
-        #                     featured_grid == new_feat, feat_label, featured_grid
-        #                 )
-        #                 # Add node to our graph
-        #                 graph.add_node(feat_label)
-        #                 graph.add_edge(feature, feat_label)
-        #                 # add an attribute for the depth of this feature as well
-        #                 # as the basins that belong to this feature
-        #                 # feature_mask = featured_grid == total_features
-        #                 # basins = np.unique(basin_labeled_voxels[feature_mask])
-        #                 depth = len(networkx.ancestors(graph, feat_label)) + 1
-        #                 networkx.set_node_attributes(
-        #                     graph,
-        #                     {
-        #                         feat_label: {
-        #                             "subset": depth,
-        #                             "basins": basins,
-        #                         }
-        #                     },
-        #                 )
         # First, we clean up the graph in case we removed a node earlier due
         # to incorrect labeling and this resulted in a fake split (e.g. Dy2C)
         graph = self._clean_reducible_nodes(graph)
         # Now we have a graph with information associated with each basin. We want
         # to label each node.
-        graph = self._mark_atomic(graph, bader, elf_grid, shell_depth)
-
+        graph = self._mark_atomic(graph, downscaled_basin_labeled_voxels, downscaled_elf_grid, shell_depth)
+        
         # Now we want to label our valence features as Covalent, Metallic, or bare electron.
         # Many covalent and metallic features are easy to find. Covalent bonds
         # are typically exactly along a bond between an atom and its nearest
         # neighbors. Metallic features have a low depth. We mark these first
         graph = self._mark_covalent_lonepair(
-            bader,
             graph,
             min_covalent_charge=min_covalent_charge,
             min_covalent_angle=min_covalent_angle,
@@ -1510,6 +715,7 @@ class ElfAnalyzerToolkit:
         # correct for these here by looking for shell basins outside the atoms
         # radius. We need to run a new bader with the labeled structure for this
         # so we also take advantage of the moment to assign radii to the features
+        # Note we don't use downscaled grid here
         radii = self._get_atomic_radii(
             graph, 
             bader, 
@@ -1526,7 +732,8 @@ class ElfAnalyzerToolkit:
         if combine_shells:
             graph = self._reduce_atomic_shells(graph)
         
-        # Now we want to mark the radius of each feature
+        # Now we want to mark the radius of each feature. We don't use the
+        # downscaled grid here to get the best chance at a reasonable radius
         graph = self._mark_feature_radii(
             graph=graph,
             bader=bader,
@@ -1616,12 +823,13 @@ class ElfAnalyzerToolkit:
     def _mark_atomic(
         self,
         graph: BifurcationGraph(),
-        bader,
+        # bader,
+        basin_labeled_voxels,
         elf_grid,
         shell_depth: float = 0.05,
     ):
         elf_data = elf_grid.total
-        basin_labeled_voxels = bader.bader_volumes.copy()
+        # basin_labeled_voxels = bader.bader_volumes.copy()
         # create a variable to track the number of atoms left to assign
         remaining_atoms = len(self.structure)
         # BUG: The remaining atom count is broken currently. Sometimes atoms are
@@ -1679,7 +887,7 @@ class ElfAnalyzerToolkit:
                     low_elf_mask = np.isin(basin_labeled_voxels, basins) & np.where(
                         elf_data > parent_split, True, False
                     )
-                    atoms_in_basin, atom_types = self.get_atoms_surrounded_by_volume(
+                    atoms_in_basin, atom_types = elf_grid.get_atoms_surrounded_by_volume(
                         low_elf_mask, return_type=True
                     )
                     basin_type = "val"
@@ -1744,7 +952,7 @@ class ElfAnalyzerToolkit:
                             elf_data > parent_split, True, False
                         )
                         atoms_in_basin, atom_types = (
-                            self.get_atoms_surrounded_by_volume(
+                            elf_grid.get_atoms_surrounded_by_volume(
                                 low_elf_mask, return_type=True
                             )
                         )
@@ -1952,75 +1160,75 @@ class ElfAnalyzerToolkit:
         """
         Reduces shell nodes to a single node
         """
-
-        # first we find all of the reducible nodes
+        # We want to combine any nodes that belong to the same atomic shell. We
+        # can do this by confirming that they share 2 aspects: The same closest
+        # atom and a similar distance to the atom. To do this, we create a dictionary
+        # to store these two attributes and the associated shells
+        shell_groups = {}
         reducible_nodes = []
+        group_num = 0
         for i in graph.nodes:
             node = graph.nodes[i]
             if "split" in node.keys():
                 reducible_nodes.append(i)
-        # Now we loop over them backwards. We check if all of the children are
-        # shells, and if so we combine any that belong to the same atom. We also
-        # note if they were a reducible complete shell, so that atoms with multiple
-        # shells don't have their shells combined.
+            if node.get("subtype", None) != "shell":
+                continue
+            # First we get the shells nearest atom and distance
+            atom = node["nearest_atom"]
+            dist = node["atom_distance"]
+            # Now we compare to all of our dictionary items
+            assigned_group = None
+            for shell_group, values in shell_groups.items():
+                group_atom = values["atom"]
+                dist_diff = values["dists"] - dist
+                if group_atom == atom and dist_diff.max() < 0.05:
+                    assigned_group = shell_group
+                    break
+            if assigned_group is not None:
+                dists = shell_groups[assigned_group]["dists"]
+                dists = np.insert(dists,len(dists),dist)
+                shell_groups[assigned_group]["dists"] = dists
+                shell_groups[assigned_group]["nodes"].append(i)
+            else:
+                shell_groups[group_num] = {
+                    "atom" : atom,
+                    "dists" : np.array([dist]),
+                    "nodes" : [i],
+                    }
+                group_num += 1
+        
+        # Now we want to go through and combine all of the shells we just grouped
+        for group, values in shell_groups.items():
+            nodes = values["nodes"]
+            graph = self._combine_shells(graph, nodes)
+        
+        # Now that we've done that, there may be some nodes that were parents
+        # of these shells that are either empty or a parent to one newly grouped
+        # shell. We loop over the potential parents backwards, deleting any that
+        # have no children and replacing any that have only one child
+        reducible_nodes = list(np.unique(reducible_nodes))
         reducible_nodes.reverse()
-        for i in reducible_nodes:
-            node = graph.nodes[i]
-            atom_num = node["atom_num"]
-            all_shells = True
-            atom_assignments = []
-            child_indices = []
-            for child_idx, child in graph.child_dicts(i).items():
-                # skip reducible domains
-                if "split" in child.keys():
-                    all_shells = False
-                    continue
-                # Also skip shells that have already been combined and that fully
-                # surrounded an atom.
-                reducible = child.get("reducible")
-                if reducible:
-                    all_shells = False
-                    continue
-                # and skip if the subtype is not a shell
-                if child["subtype"] != "shell":
-                    all_shells = False
-                    continue
-                    # break
-                atom_assignments.append(child["nearest_atom"])
-                child_indices.append(child_idx)
-            child_indices = np.array(child_indices)
-            # If we don't have only shells or if we only have one shell, we continue
-            # if not all_shells:
-            #     continue
-            # Now, if we have only shells we want to combine them into one shell
-            # for each unique atom
-            for atom_idx in np.unique(atom_assignments):
-                child_indices_to_combine = child_indices[
-                    np.where(atom_assignments == atom_idx)[0]
-                ]
-                graph = self._combine_shells(graph, child_indices_to_combine)
-            # if we only had one unique atom, we want to remove this reducible node
-            # and replace it with the unique child
-            if len(np.unique(atom_assignments)) == 1 and all_shells:
-                child_dict = graph.nodes[child_indices[0]]
+        for parent in reducible_nodes:
+            children = graph.child_indices(parent)
+            child_num = len(children)
+            if child_num == 0:
+                # This is an empty node and we just delete it.
+                graph.remove_node(parent)
+            elif child_num == 1:
+                # This node is now the parent of a single shell feature. We replace
+                # it.
+                child_dict = graph.nodes[children[0]]
                 # recalculate depth
-                parent = graph.parent_dict(i)
-                if parent is None:
-                    # this is our lowest depth and we want to continue
-                    continue
-                parent_elf = parent["split"]
+                parent_dict = graph.nodes[parent]
+                parent_elf = parent_dict["split"]
                 depth = child_dict["max_elf"] - parent_elf
                 # clear the attributes from the first node
-                graph.nodes[i].clear()
+                graph.nodes[parent].clear()
                 # Add the attributes
-                if atom_num == 1:
-                    reducible = True
-                else:
-                    reducible = False
                 networkx.set_node_attributes(
                     graph,
                     {
-                        i: {
+                        parent: {
                             "type": "atom",
                             "subtype": "shell",
                             "basins": child_dict["basins"],
@@ -2033,18 +1241,17 @@ class ElfAnalyzerToolkit:
                             "depth": round(depth, 4),
                             "3d_depth": child_dict["3d_depth"],
                             "frac_coords": child_dict["frac_coords"],
-                            "reducible": reducible,
+                            "reducible": True,
                         }
                     },
                 )
                 # delete the child node
-                graph.remove_node(child_indices[0])
+                graph.remove_node(children[0])
 
         return graph
 
     def _mark_covalent_lonepair(
         self,
-        bader,
         graph: BifurcationGraph(),
         min_covalent_charge: float = 0.6,
         min_covalent_angle: float = 135,
@@ -2385,7 +1592,7 @@ class ElfAnalyzerToolkit:
                         "unnormalized_bare_electron_indicator": unnormalized_contributors,
                         "bare_electron_indicator": bare_electron_indicator,
                         "bare_electron_scores": contributers,
-                        "dist_beyond_atom": dist_minus_radius,
+                        "dist_beyond_atom": round(dist_minus_radius,4),
                         "coord_num": coord_num,
                         "coord_indices": coord_indices,
                         "coord_atoms": coord_atoms,
@@ -2584,30 +1791,39 @@ class ElfAnalyzerToolkit:
 
             else:
                 Xn.append(0)
-        # Now we get the Y positions. First, we calculate how spread out each end node should
-        # be.
+        
+        def assign_y_positions(graph, node_idx, y_counter, y_positions, indices):
+            # This function iteratively loops starting from the root node and
+            # places each parent node at the average position of its children.
+            # children are placed when found. The iterative nature results in
+            # connecting lines not overlapping.
+            children = graph.child_indices(node_idx)
+            if len(children) == 0:  # it's a leaf
+                y_positions[node_idx] = next(y_counter)
+            else:
+                for child in children:
+                    assign_y_positions(graph, child, y_counter, y_positions, indices)
+                child_ys = [y_positions[child] for child in children]
+                y_positions[node_idx] = np.mean(child_ys)
+        # Create a mapping from node ID to Y position
+        y_positions = {}
+        y_counter = itertools.count(0)  # This gives 0, 1, 2, ... for leaf placement
+        
+        # for root in root_nodes:
+        assign_y_positions(graph, 1, y_counter, y_positions, indices)
+        
+        # Then set Yn using this
+        Yn = [y_positions[i] for i in indices]
+        
+        # Normalize Y scale
         max_y = 2
+        Yn = np.array(Yn, dtype=float)
+        Yn -= Yn.min()
+        if Yn.max() > 0:
+            Yn /= Yn.max()
+            Yn *= max_y
+        # Get how spread out each node is
         y_division = max_y / len(end_indices)
-        # create a list for storing the Y values. Set each value to 0 for now
-        Yn = [0 for i in range(len(Xn))]
-        # Now we set the values for each end node by spreading them evenly.
-        for index_n, index in enumerate(end_indices):
-            Yn[indices.index(index)] = index_n * y_division
-        # Now we get the y locations for each split node. We do this in reverse because
-        # some split nodes may be parents of later split nodes and we want to make sure
-        # all children have an assigned y
-        reverse_indices = indices.copy()
-        reverse_indices.reverse()
-        for i in reverse_indices:
-            node = graph.nodes[i]
-            # check that this is a split node
-            if node.get("split", None) is not None:
-                # for each child, grab it's current y value
-                children = graph.child_indices(i)
-                child_ys = [Yn[indices.index(child_idx)] for child_idx in children]
-                # take the average and assign this as our new y value
-                y = np.average(child_ys)
-                Yn[indices.index(i)] = y
 
         # Now we need to get the lines that will be used for each edge. These will use
         # a nested lists where each edge has one entry and the sub-lists contain the
@@ -2663,9 +1879,6 @@ class ElfAnalyzerToolkit:
 
             showlegend = basin_type not in already_added_types
             already_added_types.add(basin_type)
-            # xs = Xn[np.where(types == basin_type)[0]]
-            # ys = Yn[np.where(types == basin_type)[0]]
-            # sub_labels = labels[np.where(types == basin_type)[0]]
             sub_label = labels[idx]
             if Xn1[idx] == -1:
                 fig.add_trace(
@@ -2678,7 +1891,7 @@ class ElfAnalyzerToolkit:
                         name=f"{basin_type}",
                         marker=dict(
                             symbol="circle-dot",
-                            size=36,
+                            size=18,
                             color=color,  #'#DB4551',
                             line=dict(color="grey", width=1),
                         ),
