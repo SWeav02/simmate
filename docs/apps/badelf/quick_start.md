@@ -67,7 +67,6 @@ find_electrides: true # Whether or not to use ElfAnalyzerToolkit to automaticall
 labeled_structure_up: none # If find_electrides is false, a labeled structure with dummy atoms (see ElfAnalyzerToolkit docs)
 labeled_structure_down: none # Same as above, but for spin down system
 elf_analyzer_kwargs: # Settings for the ElfAnalyzerToolkit. See ElfAnalyzerToolkit docs for more info
-    resolution: 0.01,
     include_lone_pairs: false,
     include_shared_features: true,
     min_covalent_charge: 0.6,
@@ -87,7 +86,7 @@ separate_spin: true # Whether to treat spin-up and spin-down systems separately
 shared_feature_algorithm: zero-flux # The algorithm for separating covalent/metallic features
 shared_feature_separation_method: pauling # The method used to assigne covalent/metallic charge to atoms
 ignore_low_pseudopotentials: false # Forces algorithm to ignore errors related to PPs with few electrons
-downscale_resolution: 1200 # The resolution in voxels/A^3 to downscale grids to in ElfAnalysisToolkit
+downscale_resolution: 200 # The resolution in voxels/A^3 to downscale grids to in ElfAnalysisToolkit
 write_electride_files: false # Writes the bare electron volume ELF and charge
 write_ion_radii: true # Writes the ionic radius calculated from the ELF for each atom
 write_labeled_structure: true # Writes a cif file with dummy atoms for each non-atomic ELF feature

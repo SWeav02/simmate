@@ -112,8 +112,7 @@ class ElfAnalysisBase(Workflow):
         directory: Path = None,
         separate_spin=True,
         ignore_low_pseudopotentials: bool = False,
-        resolution=0.01,
-        downscale_resolution=1200,
+        downscale_resolution=200,
         include_lone_pairs=False,
         include_shared_features=True,
         min_covalent_charge=0.2,
@@ -173,7 +172,6 @@ class ElfAnalysisBase(Workflow):
         results["spin_polarized"] = analysis_tools.spin_polarized
         results["ignore_low_pseuodopotentials"] = ignore_low_pseudopotentials
         results["downscale_resolution"] = downscale_resolution
-        results["resolution"] = resolution
         results["min_covalent_charge"] = min_covalent_charge
         results["min_covalent_angle"] = min_covalent_angle
         results["min_covalent_bond_ratio"] = min_covalent_bond_ratio

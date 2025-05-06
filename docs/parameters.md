@@ -345,15 +345,15 @@ Exclusive to BadELF workflows. This is the resolution in voxels/Angstroms^3 that
 
 === "yaml"
     ``` yaml
-    downscale_resolution: 1200
+    downscale_resolution: 200
     ```
 === "toml"
     ``` toml
-    downscale_resolution = 1200
+    downscale_resolution = 200
     ```
 === "python"
     ``` python
-    downscale_resolution = 1200
+    downscale_resolution = 200
     ```
 
 --------------------------
@@ -364,7 +364,6 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
 === "yaml"
     ``` yaml
     elf_analyzer_kwargs:
-        resolution: 0.01,
         include_lone_pairs: false,
         include_shared_features: true,
         min_covalent_charge: 0.6,
@@ -383,7 +382,6 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
 === "toml"
     ``` toml
     [elf_analyzer_kwargs]
-    resolution = 0.01
     include_lone_pairs = false
     include_shared_features = true
     min_covalent_charge = 0.6
@@ -402,7 +400,6 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
 === "python"
     ``` python
     elf_analyzer_kwargs = dict(
-        resolution = 0.01,
         include_lone_pairs = false,
         include_shared_features = true,
         min_covalent_charge = 0.6,
@@ -421,10 +418,6 @@ Exclusive to BadELF workflows. These are the keyword arguments passed to the `El
     ```
 
 Each keyword argument controls an aspect of how ELF features are found:
-
-### resolution
-
-The interval at which to scan the ELF to generate [BifurcationGraphs](/apps/badelf/finder/elf_analyzer.md). Larger values will be faster, but may miss bifurcations.
 
 ### include_lone_pairs
 

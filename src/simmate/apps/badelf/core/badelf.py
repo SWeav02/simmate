@@ -85,7 +85,7 @@ class BadElfToolkit:
         find_electrides: bool = True,
         labeled_structure: Structure = None,
         ignore_low_pseudopotentials: bool = False,
-        downscale_resolution: int = 1200,
+        downscale_resolution: int = 200,
         elf_analyzer_kwargs: dict = dict(),
     ):
         if partitioning_grid.structure != charge_grid.structure:
@@ -1070,7 +1070,7 @@ class BadElfToolkit:
         ] = "pauling",
         shared_feature_algorithm: Literal["zero-flux", "voronoi"] = "zero-flux",
         ignore_low_pseudopotentials: bool = False,
-        downscale_resolution: int = 1200,
+        downscale_resolution: int = 200,
         elf_analyzer_kwargs: dict = dict(
             resolution=0.01,
             include_lone_pairs=False,
@@ -1315,7 +1315,7 @@ class SpinBadElfToolkit:
         ] = "pauling",
         shared_feature_algorithm: Literal["zero-flux", "voronoi"] = "zero-flux",
         ignore_low_pseudopotentials: bool = False,
-        downscale_resolution: int = 1200,
+        downscale_resolution: int = 200,
         elf_analyzer_kwargs: dict = dict(
             resolution=0.01,
             include_lone_pairs=False,
@@ -1782,7 +1782,7 @@ class SpinBadElfToolkit:
         ] = "pauling",
         shared_feature_algorithm: Literal["zero-flux", "voronoi"] = "zero-flux",
         ignore_low_pseudopotentials: bool = False,
-        downscale_resolution: int = 1200,
+        downscale_resolution: int = 200,
         elf_analyzer_kwargs: dict = dict(
             resolution=0.01,
             include_lone_pairs=False,

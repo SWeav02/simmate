@@ -25,7 +25,7 @@ The `ElfAnalyzerToolkit` class can be initialized from files or by providing the
         charge_file="charge_filename", # default CHGCAR
         separate_spin = True, # Treats spin-up and spin-down separately
         ignore_low_pseudopotentials = False, # ignores issues with missing core electrons
-        downscale_resolution: int = 1200, # Downscales the ELF and charge density unless set to None
+        downscale_resolution: int = 200, # Downscales the ELF and charge density unless set to None
     )
     ```
 
@@ -46,7 +46,7 @@ The `ElfAnalyzerToolkit` class can be initialized from files or by providing the
         # The parameters below are optional
         separate_spin = True, # treats spin-up and spin-down separately
         ignore_low_pseudopotentials = False, # ignores issues with missing core electrons        
-        downscale_resolution: int = 1200, # Downscales the ELF and charge density unless set to None
+        downscale_resolution: int = 200, # Downscales the ELF and charge density unless set to None
     )
     ```
 
@@ -56,7 +56,6 @@ Once the class is initialized, all of the results can be obtained:
 
 ``` python
 results = finder.get_full_analysis(
-    resolution=0.01,
     include_lone_pairs=False,
     min_covalent_charge=0.6,
     min_covalent_angle=135,

@@ -37,11 +37,6 @@ class ElfAnalysis(Structure, Calculation):
     they were a higher resolution. None if no downscaling was used.
     """
     
-    resolution = table_column.FloatField(blank=True, null=True)
-    """
-    The step rate at which the ELF was scanned to determine bifurcations
-    """
-    
     min_covalent_charge = table_column.FloatField(blank=True, null=True)
     """
     The minimum charge required for a site to be considered a covalent
