@@ -1997,24 +1997,21 @@ class ElfAnalyzerToolkit:
         for feat_idx, attributes in valence_features.items():
             # get our subtype
             subtype = attributes["subtype"]
-            # if our subtype is anothing other than "bare electron" we have
-            # a covalent bond or metal bond and append a Z dummy atom
             if subtype == "bare electron":
                 species = "e"
-                continue
-            if not include_shared_features:
-                continue
-            if subtype == "covalent":
+            if subtype == "covalent" and include_shared_features:
                 species = "z"
-            elif subtype == "metallic":
+            elif subtype == "metallic" and include_shared_features:
                 species = "m"
-            elif subtype == "lone-pair":
+            elif subtype == "lone-pair" and include_shared_features:
                 species = "lp"
 
             # Now that we have the type of feature, we want to add it to our
             # structure.
             frac_coords = attributes["frac_coords"]
             structure.append(species, frac_coords)
+            # We also update the graph with the index this node matches with
+            networkx.set_node_attributes(graph, {feat_idx: {"structure_index": len(structure)-1}})
 
         # To find the atoms/electrides surrounding a covalent/metallic bond,
         # we need the structure to be organized with atoms first, then electrides,

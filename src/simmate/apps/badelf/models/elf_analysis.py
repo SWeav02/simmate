@@ -180,13 +180,15 @@ class ElfAnalysis(Structure, Calculation):
                 coord_number = feature.get("coord_num"),
                 coord_atom_indices = feature.get("coord_indices"),
                 coord_atom_types = feature.get("coord_atoms"),
+                feature_structure_index = feature.get("structure_index"),
                 elf_analysis = self, # links to elf analysis calc
             )
             new_row.save()
 
 class ElfFeatures(DatabaseTable):
     """
-    This table contains the elf ionic radii calculated during a badelf calculation
+    This table contains the elf features calculated during an elf analysis
+    calculation
     """
     elf_analysis = table_column.ForeignKey(
         "ElfAnalysis",
@@ -299,6 +301,11 @@ class ElfFeatures(DatabaseTable):
     ###########################################################################
     # Columns only filled out for valence features
     ###########################################################################
+    
+    feature_structure_index = table_column.IntegerField(blank=True, null=True)
+    """
+    The index of the labeled structure that this feature corresponds to.
+    """
     
     feature_radius = table_column.FloatField(blank=True, null=True)
     """
