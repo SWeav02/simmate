@@ -593,10 +593,11 @@ class ElfAnalyzerToolkit:
                     # This is always infinite, so we note that by adding -1
                     # to the front of our list
                     is_infinite = True
-                    
+                
                 atom_num = len(atoms)
                 if is_infinite:
                     atom_num = -1
+                
                 networkx.set_node_attributes(
                     graph,
                     {
@@ -1178,7 +1179,11 @@ class ElfAnalyzerToolkit:
             for shell_group, values in shell_groups.items():
                 group_atom = values["atom"]
                 dist_diff = values["dists"] - dist
-                if group_atom == atom and dist_diff.max() < 0.05:
+                # We calculate a percent difference since shells close to the
+                # core can be very close together. This likely doesn't matter
+                # for a PP model anyways.
+                percent_dist_diff = dist_diff / dist
+                if group_atom == atom and percent_dist_diff.max() < 0.2:
                     assigned_group = shell_group
                     break
             if assigned_group is not None:
@@ -1219,6 +1224,7 @@ class ElfAnalyzerToolkit:
                 parent_dict = graph.nodes[parent]
                 parent_elf = parent_dict["split"]
                 depth = child_dict["max_elf"] - parent_elf
+
                 # clear the attributes from the first node
                 graph.nodes[parent].clear()
                 # Add the attributes

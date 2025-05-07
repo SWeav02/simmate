@@ -297,28 +297,8 @@ class Grid(VolumetricData):
         Returns:
             The duplicated data
         """
-        raveled_data = data.ravel()
-        voxel_indices = np.indices(data.shape).reshape(3, -1).T
-        transformations = [
-            [0, 0, 0],  # -
-            [1, 0, 0],  # x
-            [0, 1, 0],  # y
-            [0, 0, 1],  # z
-            [1, 1, 0],  # xy
-            [1, 0, 1],  # xz
-            [0, 1, 1],  # yz
-            [1, 1, 1],  # xyz
-        ]
-        transformations = np.array(transformations)
-        transformations = self.get_voxel_coords_from_frac(transformations.T).T
-        supercell = np.zeros(np.array(data.shape) * 2)
-        for transformation in transformations:
-            transformed_indices = (voxel_indices + transformation).astype(int)
-            x = transformed_indices[:, 0]
-            y = transformed_indices[:, 1]
-            z = transformed_indices[:, 2]
-            supercell[x, y, z] = raveled_data
-        return supercell
+        new_data = np.tile(data, (2,2,2))
+        return new_data
 
     def get_voxels_in_radius(self, radius: float, voxel: NDArray):
         """
@@ -536,32 +516,20 @@ class Grid(VolumetricData):
         # any voxel in the feature should have different labels in each section.
         # If not, the feature is connected to itself in multiple directions and
         # must surround many atoms.
-        transformations = np.array(
-            [
-                [0, 0, 0],  # -
-                [1, 0, 0],  # x
-                [0, 1, 0],  # y
-                [0, 0, 1],  # z
-                [1, 1, 0],  # xy
-                [1, 0, 1],  # xz
-                [0, 1, 1],  # yz
-                [1, 1, 1],  # xyz
-            ]
-        )
+        transformations = np.array(list(itertools.product([0,1], repeat=3)))
+        transformations = self.get_voxel_coords_from_frac_full_array(transformations)
         # Check each atom to determine how many atoms it surrounds
         surrounded_sites = []
         for i, site in enumerate(self.structure):
             # Get the voxel coords of each atom in their equivalent spots in each
             # quadrant of the supercell
             frac_coords = site.frac_coords
-            transformed_coords = transformations + frac_coords
-            voxel_coords = self.get_voxel_coords_from_frac_full_array(
-                transformed_coords
-            ).astype(int)
+            voxel_coords = self.get_voxel_coords_from_frac(frac_coords)
+            transformed_coords = (transformations + voxel_coords).astype(int)
             # Get the feature label at each transformation. If the atom is not surrounded
             # by this basin, at least some of these feature labels will be the same
             features = inverted_feature_supercell[
-                voxel_coords[:, 0], voxel_coords[:, 1], voxel_coords[:, 2]
+                transformed_coords[:, 0], transformed_coords[:, 1], transformed_coords[:, 2]
             ]
             if len(np.unique(features)) == 8:
                 # The atom is completely surrounded by this basin and the basin belongs
@@ -583,6 +551,11 @@ class Grid(VolumetricData):
         """
         Checks if a feature extends infinitely in at least one direction
         """
+        # First we check that there is at least one feature in the mask. If not
+        # we return False as there is no feature.
+        if (~mask).all():
+            return False
+        
         structure = np.ones([3, 3, 3])
         # Now we create a supercell of the mask so we can check connections to
         # neighboring cells. This will be used to check if the feature connects
@@ -590,10 +563,25 @@ class Grid(VolumetricData):
         supercell_mask = self.get_2x_supercell(mask)
         # Now we use use scipy to label unique features in our masks
         feature_supercell = self.label(supercell_mask, structure)
-        # First we check for feature connectivity. If we have 8 unique features,
-        # we have a feature that doesn't extend infinitely
+        # Now we check if we have the same label in any of the adjacent unit
+        # cells. If yes we have an infinite feature.
+        transformations = np.array(list(itertools.product([0,1], repeat=3)))
+        transformations = self.get_voxel_coords_from_frac_full_array(transformations)
+        initial_coord = np.argwhere(mask)[0]
+        transformed_coords = (transformations + initial_coord).astype(int)
+
+        # Get the feature label at each transformation. If the atom is not surrounded
+        # by this basin, at least some of these feature labels will be the same
+        features = feature_supercell[
+            transformed_coords[:, 0], transformed_coords[:, 1], transformed_coords[:, 2]
+        ]
+        
         inf_feature = False
-        if len(np.unique(feature_supercell)) != 9:
+        # If any of the transformed coords have the same feature value, this
+        # feature extends between unit cells in at least 1 direction and is
+        # infinite. This corresponds to the list of unique features being below
+        # 8
+        if len(np.unique(features)) < 8:
             inf_feature = True
 
         return inf_feature
@@ -645,14 +633,14 @@ class Grid(VolumetricData):
             total, zoom_factor, order=order, mode="grid-wrap", grid_mode=True
         )  # , prefilter=False,)
         # if the diff exists, get the new diff data
-        new_diff = None
         if diff is not None:
             new_diff = zoom(
                 diff, zoom_factor, order=order, mode="grid-wrap", grid_mode=True
             )  # , prefilter=False,)
-
-        # get the new data dict and return a new grid
-        data = {"total": new_total, "diff": new_diff}
+            data = {"total": new_total, "diff": new_diff}
+        else:
+            # get the new data dict and return a new grid
+            data = {"total": new_total}
 
         return Grid(self.structure, data)
 
