@@ -69,6 +69,8 @@ class PartitioningToolkit:
             A list with 200 pairs of voxel coordinates and data values along
             a line between two positions.
         """
+        # TODO: add option to cut out a small portion of the grid surrounding the
+        # bond.
         grid_data = self.grid.copy().total
         label_data = self.bader.atoms_volumes
         slope = [b - a for a, b in zip(site_voxel_coord, neigh_voxel_coord)]
@@ -433,64 +435,90 @@ class PartitioningToolkit:
         Returns:
             The global minimum of form [line_position, value, frac_position]
         """
-        amount_to_pad = 10
+        # breakpoint()
         grid = self.grid.copy()
-        padded = np.pad(grid.total, amount_to_pad, mode="wrap")
-
-        # interpolate the grid with a more rigorous method to find more exact value
-        # for the plane.
-        a, b, c = grid.get_padded_grid_axes(10)
-        fn = RegularGridInterpolator((a, b, c), padded, method=method)
-
-        # create variables for if the line needs to be shifted from what the
-        # rough partitioning found
-        centered = False
-        amount_to_shift = 0
+        grid_data = grid.total
+        neighborhood = 5
+        shape = grid_data.shape
+    
+        # get positions as array
+        positions = np.array(positions)
+        rounded_positions = np.floor(positions).astype(int)
+        position_diff = positions-rounded_positions
+        current_elf_min_index = elf_min_index.copy()
+        
         attempts = 0
-
-        while centered == False:
-            if attempts == 5:
-                break
-            else:
-                attempts += 1
-                # If the position wasn't centered previously, we need to shift
-                # the index
-                elf_min_index = elf_min_index + amount_to_shift
-                line_section = positions[elf_min_index - 3 : elf_min_index + 4]
-                line_section_x = [
-                    i for i in range(elf_min_index - 3, elf_min_index + 4)
+        centered = False
+        while centered == False and attempts < 6:
+            attempts += 1
+            # keep track of the current line index
+            old_elf_min_index = current_elf_min_index.copy()
+            rounded_min_pos = rounded_positions[old_elf_min_index]
+            
+            # get a box surrounding the center voxel           
+            slices = []
+            for s, x in zip(shape, rounded_min_pos):
+                indices = [(x + i) % s for i in range(-neighborhood, neighborhood +1)]
+                slices.append(indices)
+            box = grid_data[np.ix_(*slices)]
+            
+            # # create a map for mapping data from the full grid to our box. These are
+            # # numpy arrays where the indices correspond to the box indices and the
+            # # values correspond to the original indices
+            grid_to_box_maps = [
+                dict(zip(slices[i], [j for j in range(len(slices[i]))]))
+                for i in range(3)
                 ]
-
-                values_fine = []
-                # Get the list of values from the interpolated grid
-                for pos in line_section:
-                    new_pos = [i + amount_to_pad for i in pos]
-                    value_fine = float(fn(new_pos))
-                    values_fine.append(value_fine)
-
-                # Find the minimum value of this line as well as the index for this value's
-                # position.
-                try:
-                    if extrema == "min":
-                        minimum_value = min(values_fine)
-                    elif extrema == "max":
-                        minimum_value = max(values_fine)
-                except:
-                    attempts = 5
-                    continue
-                min_pos = values_fine.index(minimum_value)  # + global_min_pos[0]-5
-
-                if min_pos == 4:
-                    # Our line is centered and we can move on
-                    centered = True
-                else:
-                    # Our line is not centered and we need to adjust it
-                    amount_to_shift = min_pos - 4
-
+            
+            # Get the positions immediately surrounding the current index
+            in_box_mask = np.zeros(len(rounded_positions)).astype(bool)
+            in_box_mask[range(old_elf_min_index-4, old_elf_min_index+5)] = True
+            # Get the positions that sit inside the box
+            # in_box_mask = (
+            #     np.isin(rounded_positions[:, 0], slices[0][:-1]) &
+            #     np.isin(rounded_positions[:, 1], slices[1][:-1]) &
+            #     np.isin(rounded_positions[:, 2], slices[2][:-1])
+            # )
+            pos_in_box = rounded_positions[in_box_mask]
+            # Get the line positions in terms of the boxes indices
+            box_pos_coords = np.array([
+                [grid_to_box_maps[0][x], grid_to_box_maps[1][y], grid_to_box_maps[2][z]]
+                for x, y, z in pos_in_box
+            ]).astype(float)
+            diff_in_box = position_diff[in_box_mask]
+            box_pos_coords += diff_in_box
+                
+            # Create an interpolator for this box
+            a = [i for i in range(box.shape[0])]
+            b = [i for i in range(box.shape[1])]
+            c = [i for i in range(box.shape[2])]
+            fn = RegularGridInterpolator((a, b, c), box, method = "cubic")
+            
+            # get the values at the points in the box
+            values = fn(box_pos_coords)
+            
+            # Find the min/max along this line
+            if extrema == "min":
+                minima = self.find_minimum(values)
+            elif extrema == "max":
+                minima = self.find_maximum(values)
+            global_min = self.get_closest_extrema_to_center(values, minima)
+            
+            # Now get the index in terms of the original line
+            current_elf_min_index = np.where(in_box_mask)[0][global_min[0]]
+            if old_elf_min_index == current_elf_min_index:
+                centered=True
+        
+        # We've found the minimum index. Now we want to refine it using a polynomial
+        # fit to get the position between exact positions
+        line_section_x = [i for i in range(current_elf_min_index-3, current_elf_min_index+4)]
+        values_fine = values[[i for i in range(global_min[0]-3, global_min[0]+4)]]      
+        
         if not centered:
             # The above sometimes fails because the linear fitting gives a guess
             # for the minimum that isn't close. To handle this we treat these
             # situations rigorously
+            amount_to_pad = 10
             values = []
 
             # Get the ELF value for every position in the line.
@@ -511,10 +539,7 @@ class PartitioningToolkit:
             # now we want a small section of the line surrounding the minimum
             values_fine = values[global_min[0] - 3 : global_min[0] + 4]
             line_section_x = [i for i in range(global_min[0] - 3, global_min[0] + 4)]
-
-        # now that we've found the values surrounding the minimum of our line,
-        # we can fit these values to a 2nd degree polynomial and solve for its
-        # minimum point
+        
         try:
             d, e, f = np.polyfit(line_section_x, values_fine, 2)
             x = -e / (2 * d)
@@ -523,142 +548,8 @@ class PartitioningToolkit:
             elf_min_frac_new = elf_min_index_new / (len(positions) - 1)
         except:
             raise Exception("Refinement reached end of bond and failed to find radius.")
-
-        return [elf_min_index_new, elf_min_value_new, elf_min_frac_new]
-    
-    # def _refine_line_part_frac(
-    #     self,
-    #     positions: list,
-    #     elf_min_index: int,
-    #     extrema: str,
-    #     method: str = "cubic",
-    # ):
-    #     """
-    #     Refines the location of the minimum along an ELF line between two sites.
-    #     To do this, the initial estimate from a linear interpolation of the line
-    #     is used and a cubic interpolation is used in a smaller area around the
-    #     estimated point. The sampled area is adjusted if it is found to not be
-    #     centered on the new more accurate minimum.
-
-    #     Args:
-    #         positions (list):
-    #             A list of positions given as voxel coordinates along the line
-    #             of interest
-    #         elf_min_index (int):
-    #             The index along the line at which the linear interpolation estimated
-    #             the minimum.
-    #         extrema (str):
-    #             Which type of extrema to refine. Either max or min.
-    #         method (str):
-    #             The method to use for interpolation
-
-    #     Returns:
-    #         The global minimum of form [line_position, value, frac_position]
-    #     """
-    #     breakpoint()
-    #     # amount_to_pad = 10
-    #     neighborhood = 5
-    #     padding = 3
-    #     grid = self.grid.copy()
-    #     grid_data = grid.total
         
-    #     # padded = np.pad(grid.total, neighborhood, mode="wrap")
-    #     # padded = np.pad(grid.total, amount_to_pad, mode="wrap")
-
-    #     # interpolate the grid with a more rigorous method to find more exact value
-    #     # for the plane.
-    #     # a, b, c = grid.get_padded_grid_axes(10)
-    #     # fn = RegularGridInterpolator((a, b, c), padded, method=method)
-
-    #     # create variables for if the line needs to be shifted from what the
-    #     # rough partitioning found
-    #     centered = False
-    #     # amount_to_shift = 0
-    #     attempts = 0
-    #     current_index = elf_min_index
-
-    #     while centered == False:
-    #         if attempts == 5:
-    #             break
-    #         else:
-    #             attempts += 1
-    #             # We want to get a box around the expected minimum
-    #             current_positions = positions[current_index-neighborhood:current_index+neighborhood+1]
-    #             current_positions = np.array(current_positions)
-                
-    #             #
-    #     #         # If the position wasn't centered previously, we need to shift
-    #     #         # the index
-    #     #         elf_min_index = elf_min_index + amount_to_shift
-    #     #         line_section = positions[elf_min_index - 3 : elf_min_index + 4]
-    #     #         line_section_x = [
-    #     #             i for i in range(elf_min_index - 3, elf_min_index + 4)
-    #     #         ]
-
-    #     #         values_fine = []
-    #     #         # Get the list of values from the interpolated grid
-    #     #         for pos in line_section:
-    #     #             new_pos = [i + amount_to_pad for i in pos]
-    #     #             value_fine = float(fn(new_pos))
-    #     #             values_fine.append(value_fine)
-
-    #     #         # Find the minimum value of this line as well as the index for this value's
-    #     #         # position.
-    #     #         try:
-    #     #             if extrema == "min":
-    #     #                 minimum_value = min(values_fine)
-    #     #             elif extrema == "max":
-    #     #                 minimum_value = max(values_fine)
-    #     #         except:
-    #     #             attempts = 5
-    #     #             continue
-    #     #         min_pos = values_fine.index(minimum_value)  # + global_min_pos[0]-5
-
-    #     #         if min_pos == 4:
-    #     #             # Our line is centered and we can move on
-    #     #             centered = True
-    #     #         else:
-    #     #             # Our line is not centered and we need to adjust it
-    #     #             amount_to_shift = min_pos - 4
-
-    #     # if not centered:
-    #     #     # The above sometimes fails because the linear fitting gives a guess
-    #     #     # for the minimum that isn't close. To handle this we treat these
-    #     #     # situations rigorously
-    #     #     values = []
-
-    #     #     # Get the ELF value for every position in the line.
-    #     #     for pos in positions:
-    #     #         new_pos = [i + amount_to_pad for i in pos]
-    #     #         value = float(fn(new_pos))
-    #     #         values.append(value)
-
-    #     #     # Get a list of all of the minima along the line
-    #     #     if extrema == "min":
-    #     #         minima = self.find_minimum(values)
-    #     #     elif extrema == "max":
-    #     #         minima = self.find_maximum(values)
-
-    #     #     # then we grab the local minima closest to the midpoint of the line
-    #     #     global_min = self.get_closest_extrema_to_center(values, minima)
-
-    #     #     # now we want a small section of the line surrounding the minimum
-    #     #     values_fine = values[global_min[0] - 3 : global_min[0] + 4]
-    #     #     line_section_x = [i for i in range(global_min[0] - 3, global_min[0] + 4)]
-
-    #     # # now that we've found the values surrounding the minimum of our line,
-    #     # # we can fit these values to a 2nd degree polynomial and solve for its
-    #     # # minimum point
-    #     # try:
-    #     #     d, e, f = np.polyfit(line_section_x, values_fine, 2)
-    #     #     x = -e / (2 * d)
-    #     #     elf_min_index_new = x
-    #     #     elf_min_value_new = np.polyval(np.array([d, e, f]), x)
-    #     #     elf_min_frac_new = elf_min_index_new / (len(positions) - 1)
-    #     # except:
-    #     #     raise Exception("Refinement reached end of bond and failed to find radius.")
-
-    #     # return [elf_min_index_new, elf_min_value_new, elf_min_frac_new]
+        return [elf_min_index_new, elf_min_value_new, elf_min_frac_new]
 
 
     @staticmethod
