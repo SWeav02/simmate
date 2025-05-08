@@ -1994,6 +1994,7 @@ class ElfAnalyzerToolkit:
         valence_features = self.get_valence_summary(graph)
         structure = self.structure.copy()
         structure.remove_oxidation_states()
+        structure_index_to_node = {}
         for feat_idx, attributes in valence_features.items():
             # get our subtype
             subtype = attributes["subtype"]
@@ -2010,14 +2011,14 @@ class ElfAnalyzerToolkit:
             # structure.
             frac_coords = attributes["frac_coords"]
             structure.append(species, frac_coords)
-            # We also update the graph with the index this node matches with
-            networkx.set_node_attributes(graph, {feat_idx: {"structure_index": len(structure)-1}})
+            structure_index_to_node[len(structure)-1] = feat_idx
 
         # To find the atoms/electrides surrounding a covalent/metallic bond,
         # we need the structure to be organized with atoms first, then electrides,
         # then whatever else. We organize everything here.
         electride_indices = structure.indices_from_symbol("E")
         other_indices = []
+        node_to_index = {}
         for symbol in ["M", "Z", "Lp"]:
             other_indices.extend(structure.indices_from_symbol(symbol))
         sorted_structure = self.structure.copy()
@@ -2025,10 +2026,18 @@ class ElfAnalyzerToolkit:
         for i in electride_indices:
             frac_coords = structure[i].frac_coords
             sorted_structure.append("E", frac_coords)
+            node=structure_index_to_node[i]
+            node_to_index[node] = len(sorted_structure)-1
         for i in other_indices:
             symbol = structure.species[i].symbol
             frac_coords = structure[i].frac_coords
             sorted_structure.append(symbol, frac_coords)
+            node=structure_index_to_node[i]
+            node_to_index[node] = len(sorted_structure)-1
+        
+        # Now we want to add the nodes index to our graph
+        for node, index in node_to_index.items():
+            networkx.set_node_attributes(graph, {node: {"feature_structure_index":index}})
 
         logging.info(f"{len(electride_indices)} electride sites found")
         if len(other_indices) > 0:
