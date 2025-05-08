@@ -445,14 +445,14 @@ class PartitioningToolkit:
         positions = np.array(positions)
         rounded_positions = np.floor(positions).astype(int)
         position_diff = positions-rounded_positions
-        current_elf_min_index = elf_min_index.copy()
+        current_elf_min_index = elf_min_index
         
         attempts = 0
         centered = False
         while centered == False and attempts < 6:
             attempts += 1
             # keep track of the current line index
-            old_elf_min_index = current_elf_min_index.copy()
+            old_elf_min_index = current_elf_min_index
             rounded_min_pos = rounded_positions[old_elf_min_index]
             
             # get a box surrounding the center voxel           
