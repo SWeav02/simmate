@@ -194,66 +194,87 @@ class ElfAnalyzerToolkit:
         else:
             return None
     
-    def get_min_surface_dist(self, grid: Grid, mask: NDArray, bader, radius_refine_method) -> float:
+    def get_basin_edges(self, bader):
         """
-        Calculates the minimum distance from the maximum of a feature to
-        the nearest edge of its basin
+        Gets a mask representing the edges of a bader calculation
         """
-        #BUG: This doesn't seem to always return the same value for features that
-        # are in symmetrically identical sites.
+        # Get basin labels
+        basin_labels = bader.bader_volumes
         
-        # First we find the voxels that make up the edge of the feature. We erode
-        # the edge around the feature, protecting those at the end of the array
-        # with padding, then check where the original and erroded masks don't match
-        elf_data = grid.total.copy()
-        elf_data = np.where(mask, elf_data, 0)
-        max_vox_coord = np.argwhere(elf_data == elf_data.max())[0]
+        # Generate all 26 neighboring voxel shifts
+        neighbor_shifts = list(itertools.product([-1, 0, 1], repeat=3))
+        neighbor_shifts.remove((0, 0, 0))  # Remove the (0, 0, 0) self-shift
         
-        # We want to find any voxels in our mask that sit right outside our feature
-        padded_mask = np.pad(mask, 1, "wrap")
-        dilated_mask = binary_dilation(padded_mask, structure=np.ones([3,3,3]))
-        dilated_mask = dilated_mask[1:-1, 1:-1, 1:-1]
-        edge_voxel_coords = np.argwhere(mask!=dilated_mask)
+        # Identify voxel edges between basins
+        edge_mask = np.zeros_like(basin_labels, dtype=bool)
         
-        # Now we convert to fractional coordinates
-        edge_frac_coords = grid.get_frac_coords_from_vox_full_array(edge_voxel_coords)
-        max_frac_coord = grid.get_frac_coords_from_vox(max_vox_coord)
-        # We subtract the max frac coords from the edges to effectively shift
-        # our system to center on the maximum
-        centered_frac_coords = edge_frac_coords-max_frac_coord
-        # Now we want to shift any coordinates that are above 0.5 or below -0.5
-        # to the other side of the cell to be as close to the center as possible
-        centered_frac_coords = np.where(centered_frac_coords > 0.5, centered_frac_coords-1, centered_frac_coords)
-        centered_frac_coords = np.where(centered_frac_coords < -0.5, centered_frac_coords+1, centered_frac_coords)
-        # Now we convert to cartesan coordinates and calculate the distances
-        centered_cart_coords = grid.get_cart_coords_from_frac_full_array(centered_frac_coords)
-        distances = np.linalg.norm(centered_cart_coords, axis=1)
-        # Now we get the voxel with the shortest distance
-        shortest_distance = distances.min()
-        closest_voxel = edge_voxel_coords[np.where(distances==shortest_distance)[0][0]]
-        expansion = 1.1
-        expanded_closest_voxel = max_vox_coord + (closest_voxel-max_vox_coord)*expansion
-        label_grid = grid.copy()
-        label_grid.total = bader.bader_volumes.copy()
-        # # The true distance is somewhere between this point and our maximum.
-        # # We interpolate a line between the two
-        partitioning_tools = PartitioningToolkit(label_grid, bader)
-        # partitioning_tools = PartitioningToolkit(grid, bader)
-        pos, values, _ = partitioning_tools.get_partitioning_line_from_voxels(max_vox_coord, expanded_closest_voxel, method="nearest")
-        # # # Now we want to find the last point that corresponds to a voxel assigned to
-        # # this basin
-        label = values[0]
-        index = np.where(np.array(values)!=label)[0][0]
-        frac = (index + 0.5)/(len(pos)-1)
-        # minima=partitioning_tools.find_minimum(values)
-        # frac = minima[-1][0]/(len(pos)-1)
-        # try:
-        #     _,_,frac=partitioning_tools._refine_line_part_frac(pos, minima[-1][0], "min",radius_refine_method)
-        # except:
-        #     breakpoint()
-        distance = frac*expansion*shortest_distance
+        # Shift label data and mark edge mask as true if it differs from original
+        # label
+        for dx, dy, dz in neighbor_shifts:
+            rolled_labels = np.roll(basin_labels, shift=(dx, dy, dz), axis=(0, 1, 2))    
+            edge_mask |= rolled_labels != basin_labels  # Mark voxel if neighbor label differs
+        return edge_mask
+    
+    # def get_min_surface_dist(self, grid: Grid, mask: NDArray, bader, radius_refine_method) -> float:
+    #     """
+    #     Calculates the minimum distance from the maximum of a feature to
+    #     the nearest edge of its basin
+    #     """
+    #     #BUG: This doesn't seem to always return the same value for features that
+    #     # are in symmetrically identical sites.
         
-        return distance
+    #     # First we find the voxels that make up the edge of the feature. We erode
+    #     # the edge around the feature, protecting those at the end of the array
+    #     # with padding, then check where the original and erroded masks don't match
+    #     elf_data = grid.total.copy()
+    #     elf_data = np.where(mask, elf_data, 0)
+    #     max_vox_coord = np.argwhere(elf_data == elf_data.max())[0]
+        
+    #     # We want to find any voxels in our mask that sit right outside our feature
+    #     padded_mask = np.pad(mask, 1, "wrap")
+    #     dilated_mask = binary_dilation(padded_mask, structure=np.ones([3,3,3]))
+    #     dilated_mask = dilated_mask[1:-1, 1:-1, 1:-1]
+    #     edge_voxel_coords = np.argwhere(mask!=dilated_mask)
+        
+    #     # Now we convert to fractional coordinates
+    #     edge_frac_coords = grid.get_frac_coords_from_vox_full_array(edge_voxel_coords)
+    #     max_frac_coord = grid.get_frac_coords_from_vox(max_vox_coord)
+    #     # We subtract the max frac coords from the edges to effectively shift
+    #     # our system to center on the maximum
+    #     centered_frac_coords = edge_frac_coords-max_frac_coord
+    #     # Now we want to shift any coordinates that are above 0.5 or below -0.5
+    #     # to the other side of the cell to be as close to the center as possible
+    #     centered_frac_coords = np.where(centered_frac_coords > 0.5, centered_frac_coords-1, centered_frac_coords)
+    #     centered_frac_coords = np.where(centered_frac_coords < -0.5, centered_frac_coords+1, centered_frac_coords)
+    #     # Now we convert to cartesan coordinates and calculate the distances
+    #     centered_cart_coords = grid.get_cart_coords_from_frac_full_array(centered_frac_coords)
+    #     distances = np.linalg.norm(centered_cart_coords, axis=1)
+    #     # Now we get the voxel with the shortest distance
+    #     shortest_distance = distances.min()
+    #     closest_voxel = edge_voxel_coords[np.where(distances==shortest_distance)[0][0]]
+    #     expansion = 1.1
+    #     expanded_closest_voxel = max_vox_coord + (closest_voxel-max_vox_coord)*expansion
+    #     label_grid = grid.copy()
+    #     label_grid.total = bader.bader_volumes.copy()
+    #     # # The true distance is somewhere between this point and our maximum.
+    #     # # We interpolate a line between the two
+    #     partitioning_tools = PartitioningToolkit(label_grid, bader)
+    #     # partitioning_tools = PartitioningToolkit(grid, bader)
+    #     pos, values, _ = partitioning_tools.get_partitioning_line_from_voxels(max_vox_coord, expanded_closest_voxel, method="nearest")
+    #     # # # Now we want to find the last point that corresponds to a voxel assigned to
+    #     # # this basin
+    #     label = values[0]
+    #     index = np.where(np.array(values)!=label)[0][0]
+    #     frac = (index + 0.5)/(len(pos)-1)
+    #     # minima=partitioning_tools.find_minimum(values)
+    #     # frac = minima[-1][0]/(len(pos)-1)
+    #     # try:
+    #     #     _,_,frac=partitioning_tools._refine_line_part_frac(pos, minima[-1][0], "min",radius_refine_method)
+    #     # except:
+    #     #     breakpoint()
+    #     distance = frac*expansion*shortest_distance
+        
+    #     return distance
         
     def get_bifurcation_graphs(
         self,
@@ -306,6 +327,7 @@ class ElfAnalyzerToolkit:
         self,
         elf_grid: Grid,
         bader,
+        edge_mask: NDArray,
             ):
         """
         Scans through each bader basin and determines when they connect
@@ -335,8 +357,7 @@ class ElfAnalyzerToolkit:
         neighbor_shifts = list(itertools.product([-1, 0, 1], repeat=3))
         neighbor_shifts.remove((0, 0, 0))  # Remove the (0, 0, 0) self-shift
 
-        # Identify voxel edges between basins
-        edge_mask = np.zeros_like(basin_labels, dtype=bool)
+        # Get labels and elf values surrounding each voxel
         shifted_labels_list = []
         shifted_elf_list = []
 
@@ -346,8 +367,6 @@ class ElfAnalyzerToolkit:
 
             shifted_labels_list.append(rolled_labels)
             shifted_elf_list.append(rolled_elf)
-
-            edge_mask |= rolled_labels != basin_labels  # Mark voxel if neighbor label differs
 
         # Data for edge voxels
         edge_voxels = np.where(edge_mask)
@@ -543,11 +562,13 @@ class ElfAnalyzerToolkit:
             downscaled_label_grid.total = basin_labeled_voxels
         downscaled_basin_labeled_voxels = downscaled_label_grid.total
         
+        edge_mask = self.get_basin_edges(bader)
         # We don't use a downscaled ELF here to ensure that we find all possible
         # maxima
         important_elf_values = self._get_important_elf_domains(
             elf_grid=elf_grid,
             bader=bader,
+            edge_mask=edge_mask,
             )
         
         # get an initial graph connecting bifurcations and final basins
@@ -617,8 +638,7 @@ class ElfAnalyzerToolkit:
             graph=graph,
             bader=bader,
             elf_grid=elf_grid,
-            voxel_labels=basin_labeled_voxels,
-            radius_refine_method=radius_refine_method,
+            edge_mask=edge_mask,
             )
         
         # Now we calculate a bare electron indicator for each valence basin. This
@@ -1427,26 +1447,56 @@ class ElfAnalyzerToolkit:
     def _mark_feature_radii(
             self,
             graph: BifurcationGraph(),
-            bader,
             elf_grid: Grid,
-            voxel_labels: NDArray,
-            radius_refine_method: str,
+            bader,
+            edge_mask: NDArray,
             ):
-        
+        # TODO: refine radii to be between interior and exterior edge voxels
+        basin_labeled_voxels = bader.bader_volumes
+        basin_radii = []
+        for basin in tqdm(range(len(bader.bader_maxima)), desc="Calculating feature radii"):
+            basin_edge_mask = (basin_labeled_voxels == basin) & edge_mask
+            edge_vox_coords = np.argwhere(basin_edge_mask)
+            edge_frac_coords = elf_grid.get_frac_coords_from_vox_full_array(edge_vox_coords)
+            basin_frac_coord = bader.bader_maxima_fractional[basin]
+
+            coord_diff = basin_frac_coord - edge_frac_coords
+            coord_diff -= np.round(coord_diff)
+            cart_coords = elf_grid.get_cart_coords_from_frac_full_array(coord_diff)
+            norm = np.linalg.norm(cart_coords, axis=1)
+            basin_radii.append(norm.min())
+        basin_radii = np.array(basin_radii)
         valence_summary = self.get_valence_summary(graph)
-        for feature_idx, attributes in tqdm(valence_summary.items(), desc="Calculating feature radii"):
+        for feature_idx, attributes in valence_summary.items():
             basins = attributes["basins"]
-            mask = np.isin(voxel_labels, basins)
-            feature_radius=self.get_min_surface_dist(
-                grid=elf_grid, 
-                mask=mask, 
-                bader=bader,
-                radius_refine_method=radius_refine_method
-                )
+            feature_radius = basin_radii[basins].min()
             networkx.set_node_attributes(
                 graph, {feature_idx: {"feature_radius": feature_radius}}
             )
         return graph
+    # def _mark_feature_radii(
+    #         self,
+    #         graph: BifurcationGraph(),
+    #         bader,
+    #         elf_grid: Grid,
+    #         voxel_labels: NDArray,
+    #         radius_refine_method: str,
+    #         ):
+        
+    #     valence_summary = self.get_valence_summary(graph)
+    #     for feature_idx, attributes in tqdm(valence_summary.items(), desc="Calculating feature radii"):
+    #         basins = attributes["basins"]
+    #         mask = np.isin(voxel_labels, basins)
+    #         feature_radius=self.get_min_surface_dist(
+    #             grid=elf_grid, 
+    #             mask=mask, 
+    #             bader=bader,
+    #             radius_refine_method=radius_refine_method
+    #             )
+    #         networkx.set_node_attributes(
+    #             graph, {feature_idx: {"feature_radius": feature_radius}}
+    #         )
+    #     return graph
         
     def _mark_bare_electron_indicator(
         self,
