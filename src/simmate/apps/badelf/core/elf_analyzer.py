@@ -689,8 +689,8 @@ class ElfAnalyzerToolkit:
         graph = self._clean_reducible_nodes(graph)
         # Now we have a graph with information associated with each basin. We want
         # to label each node.
-        graph = self._mark_atomic(graph, downscaled_basin_labeled_voxels, downscaled_elf_grid, shell_depth)
-        
+        # graph = self._mark_atomic(graph, downscaled_basin_labeled_voxels, downscaled_elf_grid, shell_depth)
+        graph = self._mark_atomic(graph, basin_labeled_voxels, elf_grid, shell_depth)
         # Now we want to label our valence features as Covalent, Metallic, or bare electron.
         # Many covalent and metallic features are easy to find. Covalent bonds
         # are typically exactly along a bond between an atom and its nearest
@@ -833,7 +833,7 @@ class ElfAnalyzerToolkit:
         # BUG: The remaining atom count is broken currently. Sometimes atoms are
         # double counted, e.g. when a core feature breaks off before another feature
         # that fully surround the atom.
-        for i in graph.nodes:
+        for i in tqdm(graph.nodes, desc="Marking atomic nodes"):
             # Get the dict of information for our node and the parent of our node
             node = graph.nodes[i]
             # We are going to use attributes of each irreducible feature to
@@ -885,18 +885,13 @@ class ElfAnalyzerToolkit:
                     low_elf_mask = np.isin(basin_labeled_voxels, basins) & np.where(
                         elf_data > parent_split, True, False
                     )
-                    atoms_in_basin, atom_types = elf_grid.get_atoms_surrounded_by_volume(
-                        low_elf_mask, return_type=True
-                    )
+                    atoms_in_basin = elf_grid.get_atoms_in_volume(low_elf_mask)
                     basin_type = "val"
                     basin_subtype = None
                     if len(atoms_in_basin) > 0:
                         basin_type = "atom"
-                        if atom_types[0] == 0:
-                            basin_subtype = "core"
-                        else:
-                            basin_subtype = "shell"
-            
+                        basin_subtype = "core"
+           
                         # Note that we found a new atom
                         remaining_atoms -= 1
                     # label this basin
@@ -949,18 +944,11 @@ class ElfAnalyzerToolkit:
                         low_elf_mask = np.isin(basin_labeled_voxels, basins) & np.where(
                             elf_data > parent_split, True, False
                         )
-                        atoms_in_basin, atom_types = (
-                            elf_grid.get_atoms_surrounded_by_volume(
-                                low_elf_mask, return_type=True
-                            )
-                        )
-
+                        atoms_in_basin = elf_grid.get_atoms_in_volume(low_elf_mask)
+                        
                         if len(atoms_in_basin) > 0:
-                            # We have an core/shell region
-                            if atom_types[0] == 0:
-                                basin_subtype = "core"
-                            else:
-                                basin_subtype = "shell"
+                            # We have an core region
+                            basin_subtype = "core"
                         else:
                             # otherwise its an other
                             basin_type = "val"
@@ -1232,8 +1220,8 @@ class ElfAnalyzerToolkit:
                     graph,
                     {
                         parent: {
-                            "type": "atom",
-                            "subtype": "shell",
+                            "type": child_dict["type"],
+                            "subtype": child_dict["subtype"],
                             "basins": child_dict["basins"],
                             "atom_distance": child_dict["atom_distance"],
                             "volume": child_dict["volume"],
@@ -1268,7 +1256,7 @@ class ElfAnalyzerToolkit:
         # TODO: Many of these features could be symmetric. I should only perform
         # each action for one of these symmetric features and assign the result
         # to all of them.
-        for feature_idx, attributes in valence_summary.items():
+        for feature_idx, attributes in tqdm(valence_summary.items(), desc="Marking covalent and lone-pair nodes"):
             previous_subtype = attributes.get("subtype")
             # Default to bare electron
             basin_type = "val"
@@ -1459,7 +1447,7 @@ class ElfAnalyzerToolkit:
         """
         valence_summary = self.get_valence_summary(graph)
 
-        for feature_idx, attributes in valence_summary.items():
+        for feature_idx, attributes in tqdm(valence_summary.items(), desc="Calculating bare electron character"):
             # We want to get a metric of how "bare" each feature is. To do this,
             # we need a value that ranges from 0 to 1 for each attribute we have
             # available. We can combine these later with or without weighting to
@@ -1640,7 +1628,7 @@ class ElfAnalyzerToolkit:
                 electride_radius_min,
             ]
         )
-        for feature_idx, attributes in valence_summary.items():
+        for feature_idx, attributes in tqdm(valence_summary.items(), desc="Marking metallic and bare electron nodes"):
             if not attributes["subtype"] == "bare electron":
                 # skip any covalent/lone-pair features
                 continue

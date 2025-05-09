@@ -479,12 +479,15 @@ class PartitioningToolkit:
             #     np.isin(rounded_positions[:, 1], slices[1][:-1]) &
             #     np.isin(rounded_positions[:, 2], slices[2][:-1])
             # )
-            pos_in_box = rounded_positions[in_box_mask]
+            pos_in_box = rounded_positions[in_box_mask] % shape
             # Get the line positions in terms of the boxes indices
-            box_pos_coords = np.array([
-                [grid_to_box_maps[0][x], grid_to_box_maps[1][y], grid_to_box_maps[2][z]]
-                for x, y, z in pos_in_box
-            ]).astype(float)
+            try:
+                box_pos_coords = np.array([
+                    [grid_to_box_maps[0][x], grid_to_box_maps[1][y], grid_to_box_maps[2][z]]
+                    for x, y, z in pos_in_box
+                ]).astype(float)
+            except:
+                breakpoint()
             diff_in_box = position_diff[in_box_mask]
             box_pos_coords += diff_in_box
                 
@@ -492,7 +495,7 @@ class PartitioningToolkit:
             a = [i for i in range(box.shape[0])]
             b = [i for i in range(box.shape[1])]
             c = [i for i in range(box.shape[2])]
-            fn = RegularGridInterpolator((a, b, c), box, method = "cubic")
+            fn = RegularGridInterpolator((a, b, c), box, method = method)
             
             # get the values at the points in the box
             values = fn(box_pos_coords)
