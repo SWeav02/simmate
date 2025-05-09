@@ -314,103 +314,99 @@ class ElfAnalyzerToolkit:
         Returns a dictionary of ELF values and the basins in shared
         domains at that value.
         """
-        basin_labeled_voxels = bader.bader_volumes
-        padded_basin_labeled_voxels = np.pad(basin_labeled_voxels, 1, "wrap")
+        # Extract Bader volumes and pad them to avoid edge issues
+        basin_labels = bader.bader_volumes
         elf_data = elf_grid.total
 
-        # get frac coords and elf at maxima
-        basin_frac_coords = bader.bader_maxima_fractional
-        basin_voxel_coords = elf_grid.get_voxel_coords_from_frac_full_array(basin_frac_coords).astype(int)
-        basin_max_elf = elf_data[basin_voxel_coords[:,0],basin_voxel_coords[:,1],basin_voxel_coords[:,2]]
+        # Get fractional coordinates of Bader maxima and convert to voxel indices
+        maxima_frac_coords = bader.bader_maxima_fractional
+        maxima_voxel_coords = np.round(
+            elf_grid.get_voxel_coords_from_frac_full_array(maxima_frac_coords)
+        ).astype(int)
 
-        # TODO: Use symmetry?
+        # Get ELF values at the Bader maxima
+        maxima_elf_values = elf_data[
+            maxima_voxel_coords[:, 0],
+            maxima_voxel_coords[:, 1],
+            maxima_voxel_coords[:, 2]
+        ]
 
-        # for each basin, we will get the basins bordering it and find the
-        # point at which these two basins would bifurcate
-        completed_basins = [] # To avoid repeats
+        # Generate all 26 neighboring voxel shifts
+        neighbor_shifts = list(itertools.product([-1, 0, 1], repeat=3))
+        neighbor_shifts.remove((0, 0, 0))  # Remove the (0, 0, 0) self-shift
+
+        # Identify voxel edges between basins
+        edge_mask = np.zeros_like(basin_labels, dtype=bool)
+        shifted_labels_list = []
+        shifted_elf_list = []
+
+        for dx, dy, dz in neighbor_shifts:
+            rolled_labels = np.roll(basin_labels, shift=(dx, dy, dz), axis=(0, 1, 2))
+            rolled_elf = np.roll(elf_data, shift=(dx, dy, dz), axis=(0, 1, 2))
+
+            shifted_labels_list.append(rolled_labels)
+            shifted_elf_list.append(rolled_elf)
+
+            edge_mask |= rolled_labels != basin_labels  # Mark voxel if neighbor label differs
+
+        # Data for edge voxels
+        edge_voxels = np.where(edge_mask)
+        edge_basins = basin_labels[edge_voxels]
+        edge_elf_values = elf_data[edge_voxels]
+
+        # Gather neighbor labels and ELF values at the edge voxels
+        neighbor_labels = [
+            rolled_labels[edge_voxels] for rolled_labels in shifted_labels_list
+        ]
+        neighbor_elfs = [
+            rolled_elf[edge_voxels] for rolled_elf in shifted_elf_list
+        ]
+
+        # Combine into 2D arrays where each row is an edge voxel
+        neighbor_labels = np.column_stack(neighbor_labels)
+        neighbor_elfs = np.column_stack(neighbor_elfs)
+
+        # Analyze basin-basin connections through edges
+        processed_basins = []
         connection_elfs = []
-        connection_basins = []
-        edges = []
-        for basin in tqdm(range(len(basin_frac_coords)), desc="Finding basin neighbors"):
-            # Note that we've done this basin
-            completed_basins.append(basin)
-            # Get a mask representing where this basin is as well as the voxel indices
-            basin_mask = np.isin(basin_labeled_voxels, basin)
-            basin_voxels = np.argwhere(basin_mask)
-            # Get the ELf values at this basin
-            basin_elf = np.where(basin_mask, elf_data,0)
-            padded_basin_elf = np.pad(basin_elf, 1, "wrap")
-            padded_basin_voxels = basin_voxels + 1
-            # Make an empty edge mask. we will use this to mark the edges as we
-            # find them
-            edge_mask = np.zeros(basin_mask.shape)
+        connection_pairs = []
 
-            # We want the voxels bordering this basin. To get these, we can check the
-            # value of the voxels neighboring each voxel and see if it doesn't match
-            # the same label
-            # TODO: Move this to be done all at once rather than during the loop?
-            neighbors = set()
-            for transform in itertools.product([-1,0,1], repeat=3):
-                transformed_voxels = padded_basin_voxels + transform
-                values = padded_basin_labeled_voxels[transformed_voxels[:,0],transformed_voxels[:,1],transformed_voxels[:,2]]
-                diff_mask = np.isin(values, np.array(completed_basins), invert=True)
-                # diff_mask = values != basin
-                neighbors.update(np.unique(values[diff_mask]))
-                padded_voxel_indices = transformed_voxels[np.where(values != basin)[0]]
-                voxel_indices = padded_voxel_indices - 1
-                # wrap the voxels and label them as edges in our edge mask
-                voxel_indices[:,0] %= basin_mask.shape[0]
-                voxel_indices[:,1] %= basin_mask.shape[1]
-                voxel_indices[:,2] %= basin_mask.shape[2]
-                edge_mask[voxel_indices[:,0],voxel_indices[:,1],voxel_indices[:,2]] = 1
+        for basin_idx in tqdm(range(len(maxima_frac_coords)), desc="Finding basin neighbors"):
+            processed_basins.append(basin_idx)
+            # Add connection to self
+            connection_elfs.append(maxima_elf_values[basin_idx])
+            connection_pairs.append([basin_idx, basin_idx])
+            # Find edge voxels belonging to this basin
+            is_edge_of_basin = edge_basins == basin_idx
+            basin_edge_elfs = edge_elf_values[is_edge_of_basin]
+            basin_neighbors = neighbor_labels[is_edge_of_basin]
+            neighbor_edge_elfs = neighbor_elfs[is_edge_of_basin]
 
-            # For each neighboring basin, we want to get the highest ELF value at which
-            # it first connects to this basin. For each edge point we will generate a list
-            # of ELF values corresponding to the value at this point and the values at
-            # adjacent points. The point at which this voxel connects to our current basin
-            # is then the second highest ELF value in this list. The connection point is
-            # the highest of all of the resulting second highest ELF values.
-            
-            # Get the voxel coords for this basins edges
-            edge_voxels = np.argwhere(edge_mask==1)
-            # Get the initial elf centered at these edge voxels
-            elf = elf_data[edge_voxels[:,0],edge_voxels[:,1],edge_voxels[:,2]]
-            edge_neigh_values = [elf]
-            # Next we'll transform the voxels to their 27 neighbors and get the
-            # corresponding elf values. Note we only get elf values for voxels
-            # that are part of the current basin. Everything else returns 0
-            padded_edge_voxels = edge_voxels + 1
-            for transform in itertools.product([-1,0,1], repeat=3):
-                transformed_voxels = padded_edge_voxels + np.array(transform)
-                elf = padded_basin_elf[transformed_voxels[:,0],transformed_voxels[:,1],transformed_voxels[:,2]]
-                edge_neigh_values.append(elf)
-            edge_neigh_values = np.column_stack(edge_neigh_values)
-            # Now we want the second highest Elf value from each row.
-            second_highest = np.partition(edge_neigh_values, -2, axis=1)[:, -2]
-            
-            # For each neighbor, we want to find the edge voxel that had the highest
-            # connecting neighbor, corresponding to the value at which this neighbor basin would
-            # connect to the current basin.
-            edge_labels = basin_labeled_voxels[edge_voxels[:,0],edge_voxels[:,1],edge_voxels[:,2]]
-            neighbor_connection_values = []
-            for neighbor in neighbors:
-                neighbor_indices = np.where(edge_labels==neighbor)[0]
-                neighbor_values = second_highest[neighbor_indices]
-                neighbor_connection_values.append(neighbor_values.max())
-            
-            # convert neighbors and values to arrays and insert values corresponding
-            # to the current basin at the beginning.
-            neighbors = np.array(list(neighbors))
-            neighbor_connection_values = np.array(neighbor_connection_values)
-            neighbors = np.insert(neighbors,0,basin)
-            neighbor_connection_values = np.insert(neighbor_connection_values,0,basin_max_elf[basin])
-            
-            connection_basins.extend([[basin,i] for i in neighbors])
-            connection_elfs.extend(neighbor_connection_values)
-            edges.append(np.argwhere(edge_mask==1))
+            # Identify unique neighbor basins, excluding self and previously processed ones
+            mask_other_basins = basin_neighbors != basin_idx
+            potential_neighbors = basin_neighbors[mask_other_basins]
+            unique_neighbors = np.unique(potential_neighbors)
+            new_neighbors = unique_neighbors[~np.isin(unique_neighbors, processed_basins)]
 
+            for neighbor_idx in new_neighbors:
+                # Mask to select only edge voxels neighboring this specific basin
+                mask_neighbor = basin_neighbors == neighbor_idx
+
+                # Extract ELF values at those edges
+                neighbor_elfs_masked = np.zeros_like(neighbor_edge_elfs)
+                neighbor_elfs_masked[mask_neighbor] = neighbor_edge_elfs[mask_neighbor]
+
+                # Max ELF per voxel across 26 directions
+                max_neighbor_elf = np.max(neighbor_elfs_masked, axis=1)
+
+                # Compare with this basin's edge ELF and take the lower (bottleneck)
+                bottleneck_elf = np.minimum(max_neighbor_elf, basin_edge_elfs)
+
+                # Store the maximum bottleneck ELF as the connection value
+                connection_elfs.append(bottleneck_elf.max())
+                connection_pairs.append([basin_idx, neighbor_idx])
         # convert the connections to arrays for easy iteration
-        connection_basins = np.array(connection_basins)
+        connection_pairs = np.array(connection_pairs)
         connection_elfs = np.array(connection_elfs)
         
         # Now we want to compile which domains exist at each elf value and the
@@ -422,14 +418,12 @@ class ElfAnalyzerToolkit:
         # to each other to form a domain.
         important_values = {}
         # Add the value at the ELF slightly above where the last basin disappears
-        # important_values[possible_elf_values[0]+0.01] = [set()]
-        # connected_components = [set()]
         connected_components = []
         for elf_value in tqdm(possible_elf_values, desc="Finding bifurcation elf values"):
             # Find the indices where connections are above the current value
             elf_indices = np.where(connection_elfs>=elf_value)[0]
             # get the connected basins
-            connected_basins = connection_basins[elf_indices]
+            connected_basins = connection_pairs[elf_indices]
             uf = UnionFind()
             for a, b in connected_basins:
                 uf.union(a,b)
@@ -514,7 +508,7 @@ class ElfAnalyzerToolkit:
         min_covalent_charge: float = 0.6,
         min_covalent_angle: float = 135,
         min_covalent_bond_ratio: float = 0.4,
-        radius_refine_method: str = "linear",
+        radius_refine_method: str = "cubic",
         electride_elf_min: float = 0.5,
         electride_depth_min: float = 0.2,
         electride_charge_min: float = 0.5,
@@ -536,7 +530,7 @@ class ElfAnalyzerToolkit:
         # Also get an array labeling which bader basin each voxel is assigned to
         basin_labeled_voxels = bader.bader_volumes.copy()
 
-        # We will use a downscaled version of our ELF for speed
+        # We will use a downscaled version of our ELF for speed in some cases
         downscale_resolution = self.downscale_resolution
         if elf_grid.voxel_resolution > downscale_resolution:
             downscaled_elf_grid = elf_grid.regrid(downscale_resolution)
@@ -560,130 +554,17 @@ class ElfAnalyzerToolkit:
         graph = self._get_initial_graph(important_values=important_elf_values)
         
         logging.info("Labeling elf domains")
-        # Now loop over this graph and label each node with important information
-        for node_idx in tqdm(graph.nodes, desc="Calculating node properties"):
-            attributes = graph.nodes[node_idx]
-            parent_attributes = graph.parent_dict(node_idx)
-            if "split" in attributes.keys():
-                # this is a reducible domain. We want to get the atoms contained in
-                # this domain when it first appeared, as well as whether it was
-                # an infinite connection right before it split
-                if parent_attributes is not None:
-                    parent_split = parent_attributes["split"] - 0.01
-                    basins = graph.nodes[node_idx]["basins"]
-                    low_elf_mask = np.isin(downscaled_basin_labeled_voxels, basins) & np.where(
-                        downscaled_elf_grid.total > parent_split, True, False
-                    )
-                    high_elf_mask = np.isin(
-                        downscaled_basin_labeled_voxels, basins
-                    ) & np.where(
-                        downscaled_elf_grid.total > (attributes["split"] - 2 * 0.01), True, False
-                    )
-                    atoms = downscaled_elf_grid.get_atoms_surrounded_by_volume(low_elf_mask)
-                    # BUG-FIX we check if this feature is infinite right
-                    # before it split. This should fix issues with atomic
-                    # features in small cells that connect to themselves
-                    # by wrapping around the cell. In a larger cell, the
-                    # split would be noted, but it's not for these.
-                    is_infinite = downscaled_elf_grid.check_if_infinite_feature(high_elf_mask)
-                else:
-                    # if we have no parent this is our first node and
-                    # we have as many atoms as there are in the structure
-                    atoms = [i for i in range(len(self.structure))]
-                    # This is always infinite, so we note that by adding -1
-                    # to the front of our list
-                    is_infinite = True
-                
-                atom_num = len(atoms)
-                if is_infinite:
-                    atom_num = -1
-                
-                networkx.set_node_attributes(
-                    graph,
-                    {
-                        node_idx: {
-                            "split": attributes["split"],
-                            "num": len(graph.child_indices(node_idx)),
-                            "atoms": atoms,
-                            "atom_num": atom_num,
-                        }
-                    },
-                )
-            else:
-                # This is an irreducible domain.
-                # We want to store data relavent to the type of domain it might
-                # be.
-                # First we get a mask representing where this feature is
-                try:
-                    basins = attributes["basins"]
-                    basin_mask = np.where(np.isin(basin_labeled_voxels, basins), True, False)
-                    max_elf = np.max(elf_grid.total[basin_mask])
-                except:
-                    breakpoint()
-                split = parent_attributes["split"]
-                depth = round(max_elf - split, 4)
-                # We also want to mark a type of depth corresponding to the
-                # point where this feature connected with an infinite domain.
-                all_parent_indices = graph.deep_parent_indices(node_idx)
-                for idx in all_parent_indices:
-                    current_parent = graph.nodes[idx]
-                    if current_parent["atom_num"] == -1:
-                        infinite_split = current_parent["split"]
-                        break
-                depth_3d = round(max_elf - infinite_split, 4)
-                # Using this, we can find the average frac coords of the attractors
-                # in this basin
-                empty_structure = self.structure.copy()
-                empty_structure.remove_oxidation_states()
-                empty_structure.remove_species(empty_structure.symbol_set)
-                frac_coords = bader.bader_maxima_fractional[basins]
-                if len(frac_coords) == 1:
-                    frac_coord = frac_coords[0]
-                else:
-                    # We append these to an empty structure and use pymatgen's
-                    # merge method to get their average position
-                    for frac_coord in frac_coords:
-                        empty_structure.append("He", frac_coord)
-                    if len(empty_structure) > 1:
-                        empty_structure.merge_sites(tol=1, mode="average")
-                    frac_coord = empty_structure.frac_coords[0]
-
-                # Using these basins, we create a mask representing the full
-                # basin (not just above this elf value) and integrate the
-                # charge in this region. We also save the volume here
-                charge = round(
-                    charge_grid.total[basin_mask].sum() / charge_grid.shape.prod(),
-                    4,
-                )
-                volume = round(
-                    len(np.where(basin_mask)[0]) * elf_grid.voxel_volume, 4
-                )
-                # We can also get the distance of this feature to the nearest
-                # atom and what that atom is. We have to assume we have several
-                # basins, so we use the shortest distance and corresponding ato
-                distances = bader.bader_distance[basins]
-                distance = distances.min()
-                nearest_atom = bader.bader_atoms[basins][
-                    np.where(distances == distance)[0][0]
-                ]
-
-                # Now we update this node with the information we gathered
-                networkx.set_node_attributes(
-                    graph,
-                    {
-                        node_idx: {
-                            "max_elf": round(max_elf, 4),
-                            "depth": depth,
-                            "3d_depth": depth_3d,
-                            "charge": charge,
-                            "volume": volume,
-                            "atom_distance": round(distance, 4),
-                            "nearest_atom": nearest_atom,
-                            "nearest_atom_type": self.structure[nearest_atom].specie.symbol,
-                            "frac_coords": frac_coord,
-                        }
-                    },
-                )
+        # Get properties for each domain
+        graph = self._get_node_properties(
+            graph = graph,
+            elf_grid = elf_grid,
+            downscaled_elf_grid = downscaled_elf_grid,
+            charge_grid = charge_grid,
+            bader = bader,
+            basin_labeled_voxels = basin_labeled_voxels,
+            downscaled_basin_labeled_voxels = downscaled_basin_labeled_voxels,
+            )
+        
         # First, we clean up the graph in case we removed a node earlier due
         # to incorrect labeling and this resulted in a fake split (e.g. Dy2C)
         graph = self._clean_reducible_nodes(graph)
@@ -803,7 +684,140 @@ class ElfAnalyzerToolkit:
                     )
 
         return graph
+    
+    def _get_node_properties(
+            self, 
+            graph: BifurcationGraph(),
+            elf_grid: Grid,
+            downscaled_elf_grid: Grid,
+            charge_grid: Grid,
+            bader,
+            basin_labeled_voxels: NDArray,
+            downscaled_basin_labeled_voxels: NDArray,
+            ) -> BifurcationGraph():
+        # Now loop over this graph and label each node with important information
+        for node_idx in tqdm(graph.nodes, desc="Calculating node properties"):
+            attributes = graph.nodes[node_idx]
+            parent_attributes = graph.parent_dict(node_idx)
+            if "split" in attributes.keys():
+                # this is a reducible domain. We want to get the atoms contained in
+                # this domain when it first appeared, as well as whether it was
+                # an infinite connection right before it split
+                if parent_attributes is not None:
+                    parent_split = parent_attributes["split"] - 0.01
+                    basins = graph.nodes[node_idx]["basins"]
+                    low_elf_mask = np.isin(downscaled_basin_labeled_voxels, basins) & np.where(
+                        downscaled_elf_grid.total > parent_split, True, False
+                    )
+                    high_elf_mask = np.isin(
+                        downscaled_basin_labeled_voxels, basins
+                    ) & np.where(
+                        downscaled_elf_grid.total > (attributes["split"] - 2 * 0.01), True, False
+                    )
+                    atoms = downscaled_elf_grid.get_atoms_surrounded_by_volume(low_elf_mask)
+                    # BUG-FIX we check if this feature is infinite right
+                    # before it split. This should fix issues with atomic
+                    # features in small cells that connect to themselves
+                    # by wrapping around the cell. In a larger cell, the
+                    # split would be noted, but it's not for these.
+                    is_infinite = downscaled_elf_grid.check_if_infinite_feature(high_elf_mask)
+                else:
+                    # if we have no parent this is our first node and
+                    # we have as many atoms as there are in the structure
+                    atoms = [i for i in range(len(self.structure))]
+                    # This is always infinite, so we note that by adding -1
+                    # to the front of our list
+                    is_infinite = True
+                
+                atom_num = len(atoms)
+                if is_infinite:
+                    atom_num = -1
+                
+                networkx.set_node_attributes(
+                    graph,
+                    {
+                        node_idx: {
+                            "split": attributes["split"],
+                            "num": len(graph.child_indices(node_idx)),
+                            "atoms": atoms,
+                            "atom_num": atom_num,
+                        }
+                    },
+                )
+            else:
+                # This is an irreducible domain.
+                # We want to store data relavent to the type of domain it might
+                # be.
+                # First we get a mask representing where this feature is
+                basins = attributes["basins"]
+                basin_mask = np.isin(basin_labeled_voxels, basins)
+                max_elf = np.max(elf_grid.total[basin_mask])
+                split = parent_attributes["split"]
+                depth = round(max_elf - split, 4)
+                # We also want to mark a type of depth corresponding to the
+                # point where this feature connected with an infinite domain.
+                all_parent_indices = graph.deep_parent_indices(node_idx)
+                for idx in all_parent_indices:
+                    current_parent = graph.nodes[idx]
+                    if current_parent["atom_num"] == -1:
+                        infinite_split = current_parent["split"]
+                        break
+                depth_3d = round(max_elf - infinite_split, 4)
+                # Using this, we can find the average frac coords of the attractors
+                # in this basin
+                empty_structure = self.structure.copy()
+                empty_structure.remove_oxidation_states()
+                empty_structure.remove_species(empty_structure.symbol_set)
+                frac_coords = bader.bader_maxima_fractional[basins]
+                if len(frac_coords) == 1:
+                    frac_coord = frac_coords[0]
+                else:
+                    # We append these to an empty structure and use pymatgen's
+                    # merge method to get their average position
+                    for frac_coord in frac_coords:
+                        empty_structure.append("He", frac_coord)
+                    if len(empty_structure) > 1:
+                        empty_structure.merge_sites(tol=1, mode="average")
+                    frac_coord = empty_structure.frac_coords[0]
 
+                # Using these basins, we create a mask representing the full
+                # basin (not just above this elf value) and integrate the
+                # charge in this region. We also save the volume here
+                charge = round(
+                    charge_grid.total[basin_mask].sum() / charge_grid.shape.prod(),
+                    4,
+                )
+                volume = round(
+                    len(np.where(basin_mask)[0]) * elf_grid.voxel_volume, 4
+                )
+                # We can also get the distance of this feature to the nearest
+                # atom and what that atom is. We have to assume we have several
+                # basins, so we use the shortest distance and corresponding ato
+                distances = bader.bader_distance[basins]
+                distance = distances.min()
+                nearest_atom = bader.bader_atoms[basins][
+                    np.where(distances == distance)[0][0]
+                ]
+
+                # Now we update this node with the information we gathered
+                networkx.set_node_attributes(
+                    graph,
+                    {
+                        node_idx: {
+                            "max_elf": round(max_elf, 4),
+                            "depth": depth,
+                            "3d_depth": depth_3d,
+                            "charge": charge,
+                            "volume": volume,
+                            "atom_distance": round(distance, 4),
+                            "nearest_atom": nearest_atom,
+                            "nearest_atom_type": self.structure[nearest_atom].specie.symbol,
+                            "frac_coords": frac_coord,
+                        }
+                    },
+                )
+        return graph
+    
     def get_valence_summary(self, graph: BifurcationGraph()) -> dict:
         """
         Takes in a bifurcation graph and summarizes any valence basin
@@ -825,7 +839,7 @@ class ElfAnalyzerToolkit:
         basin_labeled_voxels,
         elf_grid,
         shell_depth: float = 0.05,
-    ):
+    ) -> BifurcationGraph():
         elf_data = elf_grid.total
         # basin_labeled_voxels = bader.bader_volumes.copy()
         # create a variable to track the number of atoms left to assign
@@ -1420,7 +1434,7 @@ class ElfAnalyzerToolkit:
             ):
         
         valence_summary = self.get_valence_summary(graph)
-        for feature_idx, attributes in valence_summary.items():
+        for feature_idx, attributes in tqdm(valence_summary.items(), desc="Calculating feature radii"):
             basins = attributes["basins"]
             mask = np.isin(voxel_labels, basins)
             feature_radius=self.get_min_surface_dist(

@@ -1083,7 +1083,7 @@ class BadElfToolkit:
             electride_charge_min=0.5,
             electride_volume_min=10,
             electride_radius_min=0.3,
-            radius_refine_method="linear",
+            radius_refine_method="cubic",
             write_results=True,
         ),
     ):

@@ -618,7 +618,7 @@ class PartitioningToolkit:
 
         unique_radii = np.zeros(len(equiv_elements))
 
-        for atom_idx in np.unique(equiv_elements):
+        for atom_idx in tqdm(np.unique(equiv_elements), desc="Calculating atom radii"):
             radius = self.get_elf_ionic_radius(
                 atom_idx, refine_method, labeled_structure
             )
