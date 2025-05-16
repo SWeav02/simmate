@@ -10,11 +10,14 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
+from pymatgen.core import Lattice
 from pymatgen.io.vasp import VolumetricData
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import label, zoom, binary_dilation
+from scipy.spatial import Voronoi
 
+from simmate.toolkit import Structure
 
 class Grid(VolumetricData):
     """
@@ -93,7 +96,7 @@ class Grid(VolumetricData):
     @cached_property
     def voxel_dist_to_origin(self):
         frac_coords = self.all_voxel_frac_coords
-        cart_coords = self.get_cart_coords_from_frac_full_array(frac_coords)
+        cart_coords = self.get_cart_coords_from_frac(frac_coords)
         corners = [
             np.array([0, 0, 0]),
             self.a,
@@ -178,6 +181,45 @@ class Grid(VolumetricData):
         # of their distances and return the maximum
         max_distance = max([np.linalg.norm(vector) for vector in voxel_vertices])
         return max_distance
+    
+    @property
+    def voxel_voronoi_facets(self):
+        """
+        The transformations, areas, and vertices of the voronoi surface
+        between any points and its neighbors in the grid
+        """
+        voxel_positions = np.array(list(itertools.product([-1,0,1], repeat=3)))
+        cart_positions = self.get_cart_coords_from_vox(voxel_positions)
+        voronoi = Voronoi(cart_positions)
+        site_neighbors = []
+        facet_vertices = []
+        facet_areas = []
+        
+        def facet_area(vertices):
+            # You can use a 2D or 3D area formula for a polygon
+            # Here we assume the vertices are in a 2D plane for simplicity
+            # For 3D, a more complicated approach (e.g., convex hull or triangulation) is needed
+            p0 = np.array(vertices[0])
+            area = 0
+            for i in range(1, len(vertices)-1):
+                p1 = np.array(vertices[i])
+                p2 = np.array(vertices[i+1])
+                area += np.linalg.norm(np.cross(p1 - p0, p2 - p0)) / 2.0
+            return area
+        
+        for i, neighbor_pair in enumerate(voronoi.ridge_points):
+            if 13 in neighbor_pair:
+                neighbor = [i for i in neighbor_pair if i != 13][0]
+                vertex_indices = voronoi.ridge_vertices[i]
+                vertices = voronoi.vertices[vertex_indices]
+                area = facet_area(vertices)
+                site_neighbors.append(neighbor)
+                facet_vertices.append(vertices)
+                facet_areas.append(area)
+        transforms = voxel_positions[np.array(site_neighbors)]
+        cart_transforms = cart_positions[np.array(site_neighbors)]
+        transform_dists = np.linalg.norm(cart_transforms,axis=1)
+        return transforms, transform_dists, np.array(facet_areas), facet_vertices
 
     @property
     def permutations(self):
@@ -227,7 +269,7 @@ class Grid(VolumetricData):
     def interpolate_value_at_frac_coords(
         self, frac_coords, method: str = "linear"
     ) -> list[float]:
-        coords = self.get_voxel_coords_from_frac_full_array(np.array(frac_coords))
+        coords = self.get_voxel_coords_from_frac(np.array(frac_coords))
         padded_data = np.pad(self.total, 10, mode="wrap")
 
         # interpolate grid to find values that lie between voxels. This is done
@@ -410,7 +452,9 @@ class Grid(VolumetricData):
 
     @classmethod
     def from_file(cls, grid_file: str | Path):
-        """Create a grid instance using a CHGCAR or ELFCAR file
+        """Create a grid instance using a CHGCAR or ELFCAR file. This uses
+        pymatgens implementation of loading a VASP grid and is usually
+        slower than the 'from_vasp' method.
 
         Args:
             grid_file (string):
@@ -425,47 +469,79 @@ class Grid(VolumetricData):
         poscar, data, _ = cls.parse_file(grid_file)
 
         return Grid(poscar.structure, data)
-
-    def to_pybader(self):
+    
+    @classmethod
+    def from_vasp(cls, filename: str | Path):
         """
-        Returns a Bader object from pybader.
-        """
-        # make sure the pybader package is present
-        try:
-            from pybader.interface import Bader
-        except:
-            raise Exception(
-                "This method requires the pybader module."
-                "Install this with `conda install -c conda-forge pybader`"
-            )
-        atoms = self.structure.cart_coords
-        lattice = self.matrix
-        density = {"charge": self.total}
-        file_info = {"voxel_offset": np.array([0, 0, 0])}
-        bader = Bader(density, lattice, atoms, file_info)
-        return bader
-
-    def run_pybader(self, threads: int = 1):
-        """
-        Convenience class for running zero-flux voxel assignment using pybader.
-        Returns a pybader Bader class object with the assigned voxels
-
+        Create a grid instance using a CHGCAR or ELFCAR file
+        
         Args:
-            cores (int):
-                The number of threads to use when running the Bader algorithm
+            filename (string):
+                The file the instance should be made from. Should be a VASP
+                CHGCAR or ELFCAR type file.
+
+        Returns:
+            Grid from the specified file.
         """
-        logging.info("Running Bader")
-        bader = self.to_pybader()
-        bader.load_config("speed")
-        bader.threads = threads
-        bader.spin_flag = True  # loading speed config resets all config vars
-        bader.volumes_init()
-        bader.bader_calc()
-        bader.bader_to_atom_distance()
-        bader.refine_volumes(bader.atoms_volumes)
-        bader.threads = 1
-        bader.min_surface_distance()
-        return bader
+        # ensure we have a path object
+        filename = Path(filename)
+        with open(filename, 'r') as f:
+            # Read header lines first
+            next(f)  # line 0
+            scale = float(next(f).strip())  # line 1
+        
+            lattice_matrix = np.array([[float(x) for x in next(f).split()] for _ in range(3)]) * scale
+        
+            atom_types = next(f).split()
+            atom_counts = list(map(int, next(f).split()))
+            total_atoms = sum(atom_counts)
+        
+            # Skip the 'Direct' or 'Cartesian' line
+            next(f)
+        
+            coords = np.array([
+                list(map(float, next(f).split()))
+                for _ in range(total_atoms)
+            ])
+        
+            lattice = Lattice(lattice_matrix)
+            atom_list = [elem for typ, count in zip(atom_types, atom_counts) for elem in [typ]*count]
+            structure = Structure(lattice=lattice, species=atom_list, coords=coords)
+        
+            # Read the FFT grid line
+            # skip empty line
+            next(f)
+            nx, ny, nz = map(int, next(f).split())
+            ngrid = nx * ny * nz
+        
+            # Read the rest of the file as a single string to avoid Python loop overhead
+            # Read the remainder of the file as a single string
+            rest = f.read()
+            
+            # Truncate everything after the word "augmentation"
+            cutoff_index = rest.lower().find("augmentation")
+            if cutoff_index != -1:
+                rest = rest[:cutoff_index]
+            
+            # Split into values and convert to float
+            data_array = np.fromiter((float(x) for x in rest.split()), dtype=float)
+            
+            if len(data_array) > ngrid:
+                delete_indices = np.arange(ngrid, ngrid+3)
+                data_array = np.delete(data_array, delete_indices)
+            
+            # Fast check for spin-polarized case
+            if len(data_array) == ngrid:
+                total = data_array.reshape((nx, ny, nz), order='F')
+                data = {"total": total}
+            elif len(data_array) == 2 * ngrid:
+                total = data_array[:ngrid].reshape((nx, ny, nz), order='F')
+                diff = data_array[ngrid:].reshape((nx, ny, nz), order='F')
+                data = {"total": total, "diff": diff}
+            else:
+                raise ValueError("Unexpected number of data points: does not match grid size.")
+        
+        return Grid(structure, data)
 
     def get_atoms_in_volume(self, volume_mask):
         """
@@ -473,7 +549,7 @@ class Grid(VolumetricData):
         area immediately around the atom, so outer core basins may not
         be caught by this.
         """
-        site_voxel_coords = self.get_voxel_coords_from_frac_full_array(
+        site_voxel_coords = self.get_voxel_coords_from_frac(
             self.structure.frac_coords
             ).astype(int)
         atom_values = []
@@ -517,7 +593,7 @@ class Grid(VolumetricData):
         # If not, the feature is connected to itself in multiple directions and
         # must surround many atoms.
         transformations = np.array(list(itertools.product([0,1], repeat=3)))
-        transformations = self.get_voxel_coords_from_frac_full_array(transformations)
+        transformations = self.get_voxel_coords_from_frac(transformations)
         # Check each atom to determine how many atoms it surrounds
         surrounded_sites = []
         for i, site in enumerate(self.structure):
@@ -566,7 +642,7 @@ class Grid(VolumetricData):
         # Now we check if we have the same label in any of the adjacent unit
         # cells. If yes we have an infinite feature.
         transformations = np.array(list(itertools.product([0,1], repeat=3)))
-        transformations = self.get_voxel_coords_from_frac_full_array(transformations)
+        transformations = self.get_voxel_coords_from_frac(transformations)
         initial_coord = np.argwhere(mask)[0]
         transformed_coords = (transformations + initial_coord).astype(int)
 
@@ -979,59 +1055,6 @@ class Grid(VolumetricData):
         # voxel positions go from 1 to (grid_size + 0.9999)
         return np.array(voxel_coords)
 
-    def get_voxel_coords_from_frac(self, frac_coords: NDArray | list):
-        """
-        Takes in a fractional coordinate and returns the cartesian coordinate.
-
-        Args:
-            frac_coords (NDArray):
-                The fractional position to convert to cartesian coords.
-
-        Returns:
-            A voxel grid index as an array.
-
-        """
-        grid_size = self.shape
-        voxel_coords = [a * b for a, b in zip(grid_size, frac_coords)]
-        # voxel positions go from 1 to (grid_size + 0.9999)
-        return np.array(voxel_coords)
-
-    def get_frac_coords_from_vox(self, voxel_coords: NDArray | list):
-        """
-        Takes in a voxel grid index and returns the fractional
-        coordinates.
-
-        Args:
-            voxel_coords (NDArray):
-                A voxel grid index
-
-        Returns:
-            A fractional coordinate as an array
-        """
-        size = self.shape
-        fa, fb, fc = [(a / b) for a, b in zip(voxel_coords, size)]
-        frac_coords = np.array([fa, fb, fc])
-        return frac_coords
-
-    def get_cart_coords_from_frac(self, frac_coords: NDArray | list):
-        """
-        Takes in fractional coordinates and returns cartesian coordinates
-
-        Args:
-            frac_coords (NDArray):
-                The fractional position to convert to cartesian coords.
-
-        Returns:
-            Cartesian coordinates as an array
-        """
-        fa, fb, fc = frac_coords[0], frac_coords[1], frac_coords[2]
-        a, b, c = self.a, self.b, self.c
-        x = fa * a[0] + fb * b[0] + fc * c[0]
-        y = fa * a[1] + fb * b[1] + fc * c[1]
-        z = fa * a[2] + fb * b[2] + fc * c[2]
-        cart_coords = np.array([x, y, z])
-        return cart_coords
-
     def get_frac_coords_from_cart(self, cart_coords: NDArray | list):
         """
         Takes in a cartesian coordinate and returns the fractional coordinates.
@@ -1043,26 +1066,9 @@ class Grid(VolumetricData):
         Returns:
             fractional coordinates as an Array
         """
-        lattice_matrix = self.matrix
-        inverse_matrix = np.linalg.inv(lattice_matrix)
-        frac_coords = np.dot(cart_coords, inverse_matrix)
+        inverse_matrix = np.linalg.inv(self.matrix)
 
-        return frac_coords
-
-    def get_cart_coords_from_vox(self, voxel_coords: NDArray | list):
-        """
-        Takes in a voxel grid index and returns the cartesian coordinates.
-
-        Args:
-            voxel_coords (NDArray):
-                A voxel grid index
-
-        Returns:
-            Cartesian coordinates as an array
-        """
-        frac_coords = self.get_frac_coords_from_vox(voxel_coords)
-        cart_coords = self.get_cart_coords_from_frac(frac_coords)
-        return cart_coords
+        return cart_coords @ inverse_matrix
 
     def get_voxel_coords_from_cart(self, cart_coords: NDArray | list):
         """
@@ -1078,7 +1084,7 @@ class Grid(VolumetricData):
         voxel_coords = self.get_voxel_coords_from_frac(frac_coords)
         return voxel_coords
 
-    def get_cart_coords_from_frac_full_array(self, frac_coords: NDArray):
+    def get_cart_coords_from_frac(self, frac_coords: NDArray):
         """
         Takes in a 2D array of shape (N,3) representing fractional coordinates
         at N points and calculates the equivalent cartesian coordinates.
@@ -1090,14 +1096,10 @@ class Grid(VolumetricData):
         Returns:
             An (N,3) shaped array of cartesian coordinates
         """
-        x, y, z = self.matrix.T
-        cart_x = np.dot(frac_coords, x)
-        cart_y = np.dot(frac_coords, y)
-        cart_z = np.dot(frac_coords, z)
-        cart_coords = np.column_stack([cart_x, cart_y, cart_z])
-        return cart_coords
+        
+        return frac_coords @ self.matrix
 
-    def get_frac_coords_from_vox_full_array(self, vox_coords: NDArray):
+    def get_frac_coords_from_vox(self, vox_coords: NDArray):
         """
         Takes in a 2D array of shape (N,3) representing voxel coordinates
         at N points and calculates the equivalent fractional coordinates.
@@ -1109,14 +1111,10 @@ class Grid(VolumetricData):
         Returns:
             An (N,3) shaped array of fractional coordinates
         """
-        x, y, z = self.shape
-        frac_x = vox_coords[:, 0] / x
-        frac_y = vox_coords[:, 1] / y
-        frac_z = vox_coords[:, 2] / z
-        frac_coords = np.column_stack([frac_x, frac_y, frac_z])
-        return frac_coords
+        
+        return vox_coords/self.shape
 
-    def get_voxel_coords_from_frac_full_array(self, frac_coords: NDArray):
+    def get_voxel_coords_from_frac(self, frac_coords: NDArray):
         """
         Takes in a 2D array of shape (N,3) representing fractional coordinates
         at N points and calculates the equivalent voxel coordinates.
@@ -1128,14 +1126,9 @@ class Grid(VolumetricData):
         Returns:
             An (N,3) shaped array of voxel coordinates
         """
-        x, y, z = self.shape
-        vox_x = frac_coords[:, 0] * x
-        vox_y = frac_coords[:, 1] * y
-        vox_z = frac_coords[:, 2] * z
-        vox_coords = np.column_stack([vox_x, vox_y, vox_z])
-        return vox_coords
+        return frac_coords * self.shape
 
-    def get_cart_coords_from_vox_full_array(self, vox_coords: NDArray):
+    def get_cart_coords_from_vox(self, vox_coords: NDArray):
         """
         Takes in a 2D array of shape (N,3) representing voxel coordinates
         at N points and calculates the equivalent cartesian coordinates.
@@ -1147,8 +1140,8 @@ class Grid(VolumetricData):
         Returns:
             An (N,3) shaped array of cartesian coordinates
         """
-        frac_coords = self.get_frac_coords_from_vox_full_array(vox_coords)
-        return self.get_cart_coords_from_frac_full_array(frac_coords)
+        frac_coords = self.get_frac_coords_from_vox(vox_coords)
+        return self.get_cart_coords_from_frac(frac_coords)
 
     def _plot_points(self, points, ax, fig, color, size: int = 20):
         """

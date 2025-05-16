@@ -21,7 +21,7 @@ from tqdm import tqdm
 from simmate.apps.badelf.core.elf_analyzer import ElfAnalyzerToolkit
 from simmate.apps.badelf.core.partitioning import PartitioningToolkit
 from simmate.apps.badelf.core.voxel_assignment import VoxelAssignmentToolkit
-from simmate.apps.bader.toolkit import Grid
+from simmate.apps.bader.toolkit import Grid, Bader
 from simmate.toolkit import Structure
 
 
@@ -68,6 +68,8 @@ class BadElfToolkit:
         elf_analyzer_kwargs (dict):
             A dictionary of keyword arguments to pass to the ElfAnalyzerToolkit
             class.
+        bader_method (str):
+            The method used to calculate zero-flux assignments.
 
     """
 
@@ -87,6 +89,7 @@ class BadElfToolkit:
         ignore_low_pseudopotentials: bool = False,
         downscale_resolution: int = 200,
         elf_analyzer_kwargs: dict = dict(),
+        bader_method: str = None,
     ):
         if partitioning_grid.structure != charge_grid.structure:
             raise ValueError("Grid structures must be the same.")
@@ -134,6 +137,7 @@ class BadElfToolkit:
         self.ignore_low_pseudopotentials = ignore_low_pseudopotentials
         self.downscale_resolution = downscale_resolution
         self.elf_analyzer_kwargs = elf_analyzer_kwargs
+        self.bader_method = bader_method
 
     @cached_property
     def elf_analyzer(self):
@@ -297,8 +301,7 @@ class BadElfToolkit:
         if self.algorithm == "zero-flux":
             print(
                 """
-                There is no partitioning property for the zero-flux algorithm as
-                the partitioning is handled by the [pybader code](https://github.com/adam-kerrigan/pybader)
+                There is no partitioning property for the zero-flux algorithm
                 """
             )
             return None
@@ -317,7 +320,7 @@ class BadElfToolkit:
         # Now get the partitioning with the given structure
         partitioning_grid.structure = partitioning_structure
         partitioning = PartitioningToolkit(
-            partitioning_grid, self.pybader
+            partitioning_grid, self.bader
         ).get_partitioning()
         return partitioning
 
@@ -437,23 +440,26 @@ class BadElfToolkit:
         return all_site_assignments.reshape(self.charge_grid.shape)
 
     @cached_property
-    def pybader(self):
+    def bader(self) -> Bader:
         """
-        A pybader Bader object run on the PartitioningGrid
+        A Bader object made from the partitioning and charge grids
         """
-        bader_grid = self.partitioning_grid.copy()
-        bader_grid.structure = self.electride_structure.copy()
-        bader = bader_grid.run_pybader(threads=self.threads)
+        reference_grid = self.partitioning_grid.copy()
+        charge_grid = self.charge_grid.copy()
+        bader = Bader(
+            charge_grid=charge_grid, 
+            reference_grid=reference_grid,
+            method=self.bader_method,
+            )
         return bader
 
     @cached_property
     def zero_flux_voxel_assignments(self):
         """
         An array of the same size as the partitioning grid representing the site
-        assignments from the zero-flux partitioning method. This uses the
-        [pybader code](https://github.com/adam-kerrigan/pybader)
+        assignments from the zero-flux partitioning method.
         """
-        return self.pybader.atoms_volumes.copy()
+        return self.bader.atom_labels.copy()
 
     @cached_property
     def voxel_assignments(self):
@@ -813,7 +819,7 @@ class BadElfToolkit:
         voxel_volume = self.charge_grid.voxel_volume
         charge_array = self.charge_grid.total.ravel()
         a, b, c = self.charge_grid.shape
-        bader = self.pybader
+        bader = self.bader
 
         # First, calculate the charges, volumes, and min dist for each atom, electride
         # and shared feature
@@ -839,14 +845,14 @@ class BadElfToolkit:
         for site in range(len(self.electride_structure)):
             if site in range(len(self.structure)):  # site is atomic
                 if self.algorithm == "zero-flux":
-                    atom_min_dists[site] = bader.atoms_surface_distance[site]
+                    atom_min_dists[site] = bader.atom_surface_distances[site]
                 else:
                     atom_min_dists[site] = get_voronoi_radius(site)
             elif site in self.electride_indices:  # site is an electride
                 if self.algorithm == "voronelf":
                     electride_min_dists[site] = get_voronoi_radius(site)
                 else:
-                    electride_min_dists[site] = bader.atoms_surface_distance[site]
+                    electride_min_dists[site] = bader.atom_surface_distances[site]
             elif site in self.shared_feature_indices:
                 if (
                     self.shared_feature_algorithm == "voronoi"
@@ -860,7 +866,7 @@ class BadElfToolkit:
                         logging.warn(
                             "The voronoi shared feature algorithm cannot be used with the general zero-flux algorithm"
                         )
-                    shared_feature_min_dists[site] = bader.atoms_surface_distance[site]
+                    shared_feature_min_dists[site] = bader.atom_surface_distances[site]
         # Get charges and volumes from base assignment
         for site in range(len(self.electride_structure)):
             site1 = site + 1
@@ -1057,35 +1063,12 @@ class BadElfToolkit:
                 writer.writerow([key, value])
 
     @classmethod
-    def from_files(
+    def from_vasp(
         cls,
         directory: Path = Path("."),
         partitioning_file: str = "ELFCAR",
         charge_file: str = "CHGCAR",
-        algorithm: Literal["badelf", "voronelf", "zero-flux"] = "badelf",
-        find_electrides: bool = True,
-        threads: int = None,
-        shared_feature_separation_method: Literal[
-            "plane", "pauling", "equal"
-        ] = "pauling",
-        shared_feature_algorithm: Literal["zero-flux", "voronoi"] = "zero-flux",
-        ignore_low_pseudopotentials: bool = False,
-        downscale_resolution: int = 200,
-        elf_analyzer_kwargs: dict = dict(
-            resolution=0.01,
-            include_lone_pairs=False,
-            min_covalent_charge=0.6,
-            min_covalent_angle=135,
-            min_covalent_bond_ratio=0.4,
-            shell_depth=0.05,
-            electride_elf_min=0.5,
-            electride_depth_min=0.2,
-            electride_charge_min=0.5,
-            electride_volume_min=10,
-            electride_radius_min=0.3,
-            radius_refine_method="cubic",
-            write_results=True,
-        ),
+        **kwargs,
     ):
         """
         Creates a BadElfToolkit instance from the requested partitioning file
@@ -1101,47 +1084,20 @@ class BadElfToolkit:
             charge_file (str):
                 The filename of the file containing the charge information. Must
                 be a VASP CHGCAR or ELFCAR type file.
-            algorithm (str):
-                The algorithm to use. Options are "badelf", "voronelf", or "zero-flux"
-            find_electrides (bool):
-                Whether or not to search for electrides in the system
-            thread (int):
-                The number of threads to use for analysis
-            shared_feature_separation_method (str):
-                The method of assigning charge from shared ELF features
-                such as covalent or metallic bonds.
-            shared_feature_algorithm (str):
-                The algorithm to use for calculating charge on covalent
-                and metallic bonds. Options are "zero-flux" or "voronoi"
-            ignore_low_pseudopotentials (bool):
-                Whether to ignore warnings about missing atomic basins
-                due to using pseudopotentials with a small amount of
-                valence electrons.
-            downscale_resolution (int):
-                The resolution in voxels/Angstrom^3 that the grids should be
-                downscaled to in the ElfAnalysisToolkit
-            elf_analyzer_kwargs (dict):
-                A dictionary of keyword arguments to pass to the ElfAnalyzerToolkit
-                class.
+            **kwargs:
+                Other arguments to pass to BadElfToolkit object
 
         Returns:
             A BadElfToolkit instance.
         """
 
-        partitioning_grid = Grid.from_file(directory / partitioning_file)
-        charge_grid = Grid.from_file(directory / charge_file)
+        partitioning_grid = Grid.from_vasp(directory / partitioning_file)
+        charge_grid = Grid.from_vasp(directory / charge_file)
         return BadElfToolkit(
             partitioning_grid=partitioning_grid,
             charge_grid=charge_grid,
             directory=directory,
-            algorithm=algorithm,
-            find_electrides=find_electrides,
-            threads=threads,
-            shared_feature_separation_method=shared_feature_separation_method,
-            shared_feature_algorithm=shared_feature_algorithm,
-            ignore_low_pseudopotentials=ignore_low_pseudopotentials,
-            elf_analyzer_kwargs=elf_analyzer_kwargs,
-            downscale_resolution=downscale_resolution,
+            **kwargs,
         )
 
     def write_species_file(self, file_type: str = "ELFCAR", species: str = "E"):
@@ -1273,12 +1229,12 @@ class BadElfToolkit:
         grid = self.partitioning_grid.copy()
         if self.algorithm == "badelf":
             grid.structure = self.structure
-            PartitioningToolkit(grid, self.pybader).plot_partitioning_results(
+            PartitioningToolkit(grid, self.bader).plot_partitioning_results(
                 partitioning
             )
         elif self.algorithm == "voronelf":
             grid.structure = self.electride_structure
-            PartitioningToolkit(grid, self.pybader).plot_partitioning_results(
+            PartitioningToolkit(grid, self.bader).plot_partitioning_results(
                 partitioning
             )
         else:
@@ -1766,38 +1722,12 @@ class SpinBadElfToolkit:
         return results
 
     @classmethod
-    def from_files(
+    def from_vasp(
         cls,
         directory: Path = Path("."),
         partitioning_file: str = "ELFCAR",
         charge_file: str = "CHGCAR",
-        separate_spin: bool = True,
-        algorithm: Literal["badelf", "voronelf", "zero-flux"] = "badelf",
-        find_electrides: bool = True,
-        labeled_structure_up: Structure = None,
-        labeled_structure_down: Structure = None,
-        threads: int = None,
-        shared_feature_separation_method: Literal[
-            "plane", "pauling", "equal"
-        ] = "pauling",
-        shared_feature_algorithm: Literal["zero-flux", "voronoi"] = "zero-flux",
-        ignore_low_pseudopotentials: bool = False,
-        downscale_resolution: int = 200,
-        elf_analyzer_kwargs: dict = dict(
-            resolution=0.01,
-            include_lone_pairs=False,
-            min_covalent_charge=0.6,
-            min_covalent_angle=135,
-            min_covalent_bond_ratio=0.4,
-            shell_depth=0.05,
-            electride_elf_min=0.5,
-            electride_depth_min=0.2,
-            electride_charge_min=0.3,
-            electride_volume_min=10,
-            electride_radius_min=0.3,
-            radius_refine_method="linear",
-            write_results=True,
-        ),
+        **kwargs,
     ):
         """
         Creates a BadElfToolkit instance from the requested partitioning file
@@ -1813,59 +1743,21 @@ class SpinBadElfToolkit:
             charge_file (str):
                 The filename of the file containing the charge information. Must
                 be a VASP CHGCAR or ELFCAR type file.
-            separate_spin (bool):
-                Whether or not to treat spin-up and spin-down separately
-            algorithm (str):
-                The algorithm to use. Options are "badelf", "voronelf", or "zero-flux"
-            find_electrides (bool):
-                Whether or not to search for electrides in the system
-            labeled_structure_up:
-                A pymatgen structure object with dummy atoms representing
-                electride, covalent, and metallic features for the spin-up
-                system
-            labeled_structure_down:
-                A pymatgen structure object with dummy atoms representing
-                electride, covalent, and metallic features for the spin-down
-                system
-            thread (int):
-                The number of threads to use for analysis
-            shared_feature_separation_method (str):
-                The method of assigning charge from shared ELF features
-                such as covalent or metallic bonds.
-            shared_feature_algorithm (str):
-                The algorithm to use for calculating charge on covalent
-                and metallic bonds. Options are "zero-flux" or "voronoi"
-            ignore_low_pseudopotentials (bool):
-                Whether to ignore warnings about missing atomic basins
-                due to using pseudopotentials with a small amount of
-                valence electrons.
-            downscale_resolution (int):
-                The resolution in voxels/Angstrom^3 that the grids should be
-                downscaled to in the ElfAnalysisToolkit
-            elf_analyzer_kwargs (dict):
-                A dictionary of keyword arguments to pass to the ElfAnalyzerToolkit
-                class.
+            **kwargs:
+                Other keyword arguments to pass to the BadElfToolkit object
 
 
         Returns:
             A BadElfToolkit instance.
         """
 
-        partitioning_grid = Grid.from_file(directory / partitioning_file)
-        charge_grid = Grid.from_file(directory / charge_file)
+        partitioning_grid = Grid.from_vasp(directory / partitioning_file)
+        charge_grid = Grid.from_vasp(directory / charge_file)
         return SpinBadElfToolkit(
             partitioning_grid=partitioning_grid,
             charge_grid=charge_grid,
             directory=directory,
-            separate_spin=separate_spin,
-            algorithm=algorithm,
-            find_electrides=find_electrides,
-            threads=threads,
-            shared_feature_separation_method=shared_feature_separation_method,
-            shared_feature_algorithm=shared_feature_algorithm,
-            ignore_low_pseudopotentials=ignore_low_pseudopotentials,
-            elf_analyzer_kwargs=elf_analyzer_kwargs,
-            downscale_resolution=downscale_resolution,
+            **kwargs,
         )
 
     def write_results_csv(self):

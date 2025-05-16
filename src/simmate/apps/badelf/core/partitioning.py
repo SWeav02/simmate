@@ -9,14 +9,13 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
-from pybader.interface import Bader
 from pymatgen.analysis.local_env import CrystalNN
 from scipy.interpolate import RegularGridInterpolator
 from scipy.signal import savgol_filter
 from scipy.spatial import ConvexHull
 from tqdm import tqdm
 
-from simmate.apps.bader.toolkit import Grid
+from simmate.apps.bader.toolkit import Grid, Bader
 from simmate.toolkit import Structure
 
 
@@ -32,7 +31,7 @@ class PartitioningToolkit:
             should only contain atoms and dummy atoms that the user
             wishes to find partitioning planes for
         bader (Bader):
-            A pybader Bader type object. This object should be labeled
+            A Bader type object. This object should be labeled
             with covalent/metallic/electride dummy atoms to properly place
             partitioning planes.
     """
@@ -72,7 +71,7 @@ class PartitioningToolkit:
         # TODO: add option to cut out a small portion of the grid surrounding the
         # bond.
         grid_data = self.grid.copy().total
-        label_data = self.bader.atoms_volumes
+        label_data = self.bader.atom_labels
         slope = [b - a for a, b in zip(site_voxel_coord, neigh_voxel_coord)]
         slope_increment = [float(x) / steps for x in slope]
 
@@ -474,11 +473,6 @@ class PartitioningToolkit:
             in_box_mask = np.zeros(len(rounded_positions)).astype(bool)
             in_box_mask[range(old_elf_min_index-4, old_elf_min_index+5)] = True
             # Get the positions that sit inside the box
-            # in_box_mask = (
-            #     np.isin(rounded_positions[:, 0], slices[0][:-1]) &
-            #     np.isin(rounded_positions[:, 1], slices[1][:-1]) &
-            #     np.isin(rounded_positions[:, 2], slices[2][:-1])
-            # )
             pos_in_box = rounded_positions[in_box_mask] % shape
             # Get the line positions in terms of the boxes indices
             try:
@@ -989,7 +983,7 @@ class PartitioningToolkit:
         )
         neigh_cart_coords = []
         neigh_cart_coords.extend(
-            grid.get_cart_coords_from_frac_full_array(neigh_frac_coords)
+            grid.get_cart_coords_from_frac(neigh_frac_coords)
         )
         # Add the neighbors cartesian coordinates
         site_neigh_pairs["neigh_coords"] = neigh_cart_coords

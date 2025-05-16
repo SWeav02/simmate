@@ -61,7 +61,7 @@ class BadElfBase(Workflow):
             shutil.copy(directory / file, badelf_directory)
 
         # Get the badelf toolkit object for running badelf.
-        badelf_tools = SpinBadElfToolkit.from_files(
+        badelf_tools = SpinBadElfToolkit.from_vasp(
             directory=badelf_directory,
             find_electrides=find_electrides,
             algorithm=algorithm,
@@ -141,7 +141,7 @@ class ElfAnalysisBase(Workflow):
             shutil.copy(directory / file, analysis_directory)
 
         # Get the badelf toolkit object for running badelf.
-        analysis_tools = ElfAnalyzerToolkit.from_files(
+        analysis_tools = ElfAnalyzerToolkit.from_vasp(
             directory=analysis_directory,
             separate_spin=separate_spin,
             ignore_low_pseudopotentials=ignore_low_pseudopotentials,

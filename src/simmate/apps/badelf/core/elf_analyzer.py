@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import json
 import logging
 import math
-import warnings
 from functools import cached_property
 from pathlib import Path
 import itertools
@@ -12,13 +10,12 @@ from tqdm import tqdm
 import networkx
 import numpy as np
 import plotly.graph_objects as go
-import psutil
 from numpy.typing import NDArray
 from pymatgen.analysis.local_env import CrystalNN
-from scipy.ndimage import binary_dilation
 
 from simmate.apps.badelf.core.partitioning import PartitioningToolkit
-from simmate.apps.badelf.core.utilities import UnionFind, BifurcationGraph
+from simmate.apps.badelf.core import Bader
+from simmate.apps.badelf.utilities import UnionFind, BifurcationGraph
 from simmate.apps.bader.toolkit import Grid
 from simmate.toolkit import Structure
 
@@ -43,11 +40,13 @@ class ElfAnalyzerToolkit:
         separate_spin: bool = False,
         ignore_low_pseudopotentials: bool = False,
         downscale_resolution: int = 200,
+        bader_method: str = None,
     ):
         self.elf_grid = elf_grid.copy()
         self.charge_grid = charge_grid.copy()
         self.directory = directory
         self.ignore_low_pseudopotentials = ignore_low_pseudopotentials
+        self.bader_method = bader_method
         if downscale_resolution is not None:
             self.downscale_resolution = downscale_resolution
         else:
@@ -161,7 +160,7 @@ class ElfAnalyzerToolkit:
     @property
     def site_voxel_coords(self) -> np.array:
         frac_coords = self.structure.frac_coords
-        vox_coords = self.elf_grid.get_voxel_coords_from_frac_full_array(frac_coords)
+        vox_coords = self.elf_grid.get_voxel_coords_from_frac(frac_coords)
         return vox_coords.astype(int)
 
     @cached_property
@@ -173,108 +172,36 @@ class ElfAnalyzerToolkit:
         return site_sphere_coords
 
     @cached_property
-    def bader_up(self):
+    def bader_up(self) -> Bader:
         """
-        Returns a completed pybader object
+        Returns a Bader object
         """
-        threads = math.floor(psutil.Process().num_threads() * 0.9 / 2)
         if self.spin_polarized:
-            return self._elf_grid_up.run_pybader(threads)
+            return Bader(
+                charge_grid=self._charge_grid_up, 
+                reference_grid=self._elf_grid_up, 
+                method=self.bader_method
+                )
         else:
-            return self.elf_grid.run_pybader(threads)
+            return Bader(
+                charge_grid=self.charge_grid, 
+                reference_grid=self.elf_grid,
+                method=self.bader_method
+                )
 
     @cached_property
-    def bader_down(self):
+    def bader_down(self) -> Bader:
         """
-        Returns a completed pybader object
+        Returns a Bader object
         """
-        threads = math.floor(psutil.Process().num_threads() * 0.9 / 2)
         if self.spin_polarized:
-            return self._elf_grid_down.run_pybader(threads)
+            return Bader(
+                charge_grid=self._charge_grid_down, 
+                reference_grid=self._elf_grid_down, 
+                method=self.bader_method
+                )
         else:
             return None
-    
-    def get_basin_edges(self, bader):
-        """
-        Gets a mask representing the edges of a bader calculation
-        """
-        # Get basin labels
-        basin_labels = bader.bader_volumes
-        
-        # Generate all 26 neighboring voxel shifts
-        neighbor_shifts = list(itertools.product([-1, 0, 1], repeat=3))
-        neighbor_shifts.remove((0, 0, 0))  # Remove the (0, 0, 0) self-shift
-        
-        # Identify voxel edges between basins
-        edge_mask = np.zeros_like(basin_labels, dtype=bool)
-        
-        # Shift label data and mark edge mask as true if it differs from original
-        # label
-        for dx, dy, dz in neighbor_shifts:
-            rolled_labels = np.roll(basin_labels, shift=(dx, dy, dz), axis=(0, 1, 2))    
-            edge_mask |= rolled_labels != basin_labels  # Mark voxel if neighbor label differs
-        return edge_mask
-    
-    # def get_min_surface_dist(self, grid: Grid, mask: NDArray, bader, radius_refine_method) -> float:
-    #     """
-    #     Calculates the minimum distance from the maximum of a feature to
-    #     the nearest edge of its basin
-    #     """
-    #     #BUG: This doesn't seem to always return the same value for features that
-    #     # are in symmetrically identical sites.
-        
-    #     # First we find the voxels that make up the edge of the feature. We erode
-    #     # the edge around the feature, protecting those at the end of the array
-    #     # with padding, then check where the original and erroded masks don't match
-    #     elf_data = grid.total.copy()
-    #     elf_data = np.where(mask, elf_data, 0)
-    #     max_vox_coord = np.argwhere(elf_data == elf_data.max())[0]
-        
-    #     # We want to find any voxels in our mask that sit right outside our feature
-    #     padded_mask = np.pad(mask, 1, "wrap")
-    #     dilated_mask = binary_dilation(padded_mask, structure=np.ones([3,3,3]))
-    #     dilated_mask = dilated_mask[1:-1, 1:-1, 1:-1]
-    #     edge_voxel_coords = np.argwhere(mask!=dilated_mask)
-        
-    #     # Now we convert to fractional coordinates
-    #     edge_frac_coords = grid.get_frac_coords_from_vox_full_array(edge_voxel_coords)
-    #     max_frac_coord = grid.get_frac_coords_from_vox(max_vox_coord)
-    #     # We subtract the max frac coords from the edges to effectively shift
-    #     # our system to center on the maximum
-    #     centered_frac_coords = edge_frac_coords-max_frac_coord
-    #     # Now we want to shift any coordinates that are above 0.5 or below -0.5
-    #     # to the other side of the cell to be as close to the center as possible
-    #     centered_frac_coords = np.where(centered_frac_coords > 0.5, centered_frac_coords-1, centered_frac_coords)
-    #     centered_frac_coords = np.where(centered_frac_coords < -0.5, centered_frac_coords+1, centered_frac_coords)
-    #     # Now we convert to cartesan coordinates and calculate the distances
-    #     centered_cart_coords = grid.get_cart_coords_from_frac_full_array(centered_frac_coords)
-    #     distances = np.linalg.norm(centered_cart_coords, axis=1)
-    #     # Now we get the voxel with the shortest distance
-    #     shortest_distance = distances.min()
-    #     closest_voxel = edge_voxel_coords[np.where(distances==shortest_distance)[0][0]]
-    #     expansion = 1.1
-    #     expanded_closest_voxel = max_vox_coord + (closest_voxel-max_vox_coord)*expansion
-    #     label_grid = grid.copy()
-    #     label_grid.total = bader.bader_volumes.copy()
-    #     # # The true distance is somewhere between this point and our maximum.
-    #     # # We interpolate a line between the two
-    #     partitioning_tools = PartitioningToolkit(label_grid, bader)
-    #     # partitioning_tools = PartitioningToolkit(grid, bader)
-    #     pos, values, _ = partitioning_tools.get_partitioning_line_from_voxels(max_vox_coord, expanded_closest_voxel, method="nearest")
-    #     # # # Now we want to find the last point that corresponds to a voxel assigned to
-    #     # # this basin
-    #     label = values[0]
-    #     index = np.where(np.array(values)!=label)[0][0]
-    #     frac = (index + 0.5)/(len(pos)-1)
-    #     # minima=partitioning_tools.find_minimum(values)
-    #     # frac = minima[-1][0]/(len(pos)-1)
-    #     # try:
-    #     #     _,_,frac=partitioning_tools._refine_line_part_frac(pos, minima[-1][0], "min",radius_refine_method)
-    #     # except:
-    #     #     breakpoint()
-    #     distance = frac*expansion*shortest_distance
-        
-    #     return distance
         
     def get_bifurcation_graphs(
         self,
@@ -326,7 +253,7 @@ class ElfAnalyzerToolkit:
     def _get_important_elf_domains(
         self,
         elf_grid: Grid,
-        bader,
+        bader: Bader,
         edge_mask: NDArray,
             ):
         """
@@ -337,13 +264,13 @@ class ElfAnalyzerToolkit:
         domains at that value.
         """
         # Extract Bader volumes and pad them to avoid edge issues
-        basin_labels = bader.bader_volumes
+        basin_labels = bader.basin_labels
         elf_data = elf_grid.total
 
         # Get fractional coordinates of Bader maxima and convert to voxel indices
-        maxima_frac_coords = bader.bader_maxima_fractional
+        maxima_frac_coords = bader.basin_maxima_frac
         maxima_voxel_coords = np.round(
-            elf_grid.get_voxel_coords_from_frac_full_array(maxima_frac_coords)
+            elf_grid.get_voxel_coords_from_frac(maxima_frac_coords)
         ).astype(int)
 
         # Get ELF values at the Bader maxima
@@ -519,7 +446,7 @@ class ElfAnalyzerToolkit:
     
     def _get_bifurcation_graph(
         self,
-        bader,
+        bader: Bader,
         elf_grid: Grid,
         charge_grid: Grid,
         shell_depth: float = 0.05,
@@ -547,7 +474,7 @@ class ElfAnalyzerToolkit:
             "Generating initial bifurcation graph."
             )
         # Also get an array labeling which bader basin each voxel is assigned to
-        basin_labeled_voxels = bader.bader_volumes.copy()
+        basin_labeled_voxels = bader.basin_labels.copy()
 
         # We will use a downscaled version of our ELF for speed in some cases
         downscale_resolution = self.downscale_resolution
@@ -562,7 +489,7 @@ class ElfAnalyzerToolkit:
             downscaled_label_grid.total = basin_labeled_voxels
         downscaled_basin_labeled_voxels = downscaled_label_grid.total
         
-        edge_mask = self.get_basin_edges(bader)
+        edge_mask = bader.basin_edges
         # We don't use a downscaled ELF here to ensure that we find all possible
         # maxima
         important_elf_values = self._get_important_elf_domains(
@@ -637,8 +564,6 @@ class ElfAnalyzerToolkit:
         graph = self._mark_feature_radii(
             graph=graph,
             bader=bader,
-            elf_grid=elf_grid,
-            edge_mask=edge_mask,
             )
         
         # Now we calculate a bare electron indicator for each valence basin. This
@@ -711,7 +636,7 @@ class ElfAnalyzerToolkit:
             elf_grid: Grid,
             downscaled_elf_grid: Grid,
             charge_grid: Grid,
-            bader,
+            bader: Bader,
             basin_labeled_voxels: NDArray,
             downscaled_basin_labeled_voxels: NDArray,
             ) -> BifurcationGraph():
@@ -788,7 +713,7 @@ class ElfAnalyzerToolkit:
                 empty_structure = self.structure.copy()
                 empty_structure.remove_oxidation_states()
                 empty_structure.remove_species(empty_structure.symbol_set)
-                frac_coords = bader.bader_maxima_fractional[basins]
+                frac_coords = bader.basin_maxima_frac[basins]
                 if len(frac_coords) == 1:
                     frac_coord = frac_coords[0]
                 else:
@@ -800,42 +725,41 @@ class ElfAnalyzerToolkit:
                         empty_structure.merge_sites(tol=1, mode="average")
                     frac_coord = empty_structure.frac_coords[0]
 
-                # Using these basins, we create a mask representing the full
-                # basin (not just above this elf value) and integrate the
-                # charge in this region. We also save the volume here
-                charge = round(
-                    charge_grid.total[basin_mask].sum() / charge_grid.shape.prod(),
-                    4,
-                )
-                volume = round(
-                    len(np.where(basin_mask)[0]) * elf_grid.voxel_volume, 4
-                )
+                # We can also get the charge from the bader analysis
+                charges = bader.basin_charges[basins]
+                charge = charges.sum()
+                # and the volumes
+                volumes = bader.basin_volumes[basins]
+                volume = volumes.sum()
                 # We can also get the distance of this feature to the nearest
                 # atom and what that atom is. We have to assume we have several
                 # basins, so we use the shortest distance and corresponding ato
-                distances = bader.bader_distance[basins]
+                distances = bader.basin_atom_dists[basins]
                 distance = distances.min()
-                nearest_atom = bader.bader_atoms[basins][
+                nearest_atom = bader.basin_atoms[basins][
                     np.where(distances == distance)[0][0]
                 ]
 
                 # Now we update this node with the information we gathered
-                networkx.set_node_attributes(
-                    graph,
-                    {
-                        node_idx: {
-                            "max_elf": round(max_elf, 4),
-                            "depth": depth,
-                            "3d_depth": depth_3d,
-                            "charge": charge,
-                            "volume": volume,
-                            "atom_distance": round(distance, 4),
-                            "nearest_atom": nearest_atom,
-                            "nearest_atom_type": self.structure[nearest_atom].specie.symbol,
-                            "frac_coords": frac_coord,
-                        }
-                    },
-                )
+                try:
+                    networkx.set_node_attributes(
+                        graph,
+                        {
+                            node_idx: {
+                                "max_elf": round(max_elf, 4),
+                                "depth": depth,
+                                "3d_depth": depth_3d,
+                                "charge": charge,
+                                "volume": volume,
+                                "atom_distance": round(distance, 4),
+                                "nearest_atom": nearest_atom,
+                                "nearest_atom_type": self.structure[nearest_atom].specie.symbol,
+                                "frac_coords": frac_coord,
+                            }
+                        },
+                    )
+                except:
+                    breakpoint()
         return graph
     
     def get_valence_summary(self, graph: BifurcationGraph()) -> dict:
@@ -855,13 +779,11 @@ class ElfAnalyzerToolkit:
     def _mark_atomic(
         self,
         graph: BifurcationGraph(),
-        # bader,
         basin_labeled_voxels,
         elf_grid,
         shell_depth: float = 0.05,
     ) -> BifurcationGraph():
         elf_data = elf_grid.total
-        # basin_labeled_voxels = bader.bader_volumes.copy()
         # create a variable to track the number of atoms left to assign
         remaining_atoms = len(self.structure)
         # BUG: The remaining atom count is broken currently. Sometimes atoms are
@@ -998,14 +920,14 @@ class ElfAnalyzerToolkit:
     def _get_atomic_radii(
             self, 
             graph: BifurcationGraph(), 
-            bader, 
+            bader: Bader ,
             elf_grid: Grid,
             radius_refine_method: str,
             ):
         valence_summary = self.get_valence_summary(graph)
         # We will need to get radii from the ELF. To do this, we need a labeled
         # pybader result to pass to our PartitioningToolkit
-        frac_coords = bader.bader_maxima_fractional
+        frac_coords = bader.basin_maxima_frac
         temp_structure = self.structure.copy()
         for feature_idx, attributes in valence_summary.items():
             if attributes["subtype"] == "covalent":
@@ -1019,15 +941,12 @@ class ElfAnalyzerToolkit:
             for basin_idx in attributes["basins"]:
                 frac_coord = frac_coords[basin_idx]
                 temp_structure.append(species, frac_coord)
+        
+        # recalculate the atoms for our bader object
+        bader_labeled = bader.copy()
+        bader_labeled.run_atom_assignment(structure=temp_structure)
 
-        temp_grid = elf_grid.copy()
-        temp_grid.structure = temp_structure
-        # TODO This can probably be made faster by rerunning only part of the
-        # bader. If not this should be passed to the BadELfToolkit to avoid
-        # repeat calculations.
-        # Make sure all of these values make sense with new H.
-        labeled_pybader = temp_grid.run_pybader()
-        partitioning = PartitioningToolkit(elf_grid, labeled_pybader)
+        partitioning = PartitioningToolkit(elf_grid, bader_labeled)
         # TODO Ideally, these radii are stored at a class level so that they
         # can be passed to the BadElfToolkit class for summary. However, this
         # requires knowledge of if this is spin-up/spin-down which I currently
@@ -1447,25 +1366,9 @@ class ElfAnalyzerToolkit:
     def _mark_feature_radii(
             self,
             graph: BifurcationGraph(),
-            elf_grid: Grid,
-            bader,
-            edge_mask: NDArray,
+            bader: Bader,
             ):
-        # TODO: refine radii to be between interior and exterior edge voxels
-        basin_labeled_voxels = bader.bader_volumes
-        basin_radii = []
-        for basin in tqdm(range(len(bader.bader_maxima)), desc="Calculating feature radii"):
-            basin_edge_mask = (basin_labeled_voxels == basin) & edge_mask
-            edge_vox_coords = np.argwhere(basin_edge_mask)
-            edge_frac_coords = elf_grid.get_frac_coords_from_vox_full_array(edge_vox_coords)
-            basin_frac_coord = bader.bader_maxima_fractional[basin]
-
-            coord_diff = basin_frac_coord - edge_frac_coords
-            coord_diff -= np.round(coord_diff)
-            cart_coords = elf_grid.get_cart_coords_from_frac_full_array(coord_diff)
-            norm = np.linalg.norm(cart_coords, axis=1)
-            basin_radii.append(norm.min())
-        basin_radii = np.array(basin_radii)
+        basin_radii = bader.basin_surface_distances
         valence_summary = self.get_valence_summary(graph)
         for feature_idx, attributes in valence_summary.items():
             basins = attributes["basins"]
@@ -1474,29 +1377,6 @@ class ElfAnalyzerToolkit:
                 graph, {feature_idx: {"feature_radius": feature_radius}}
             )
         return graph
-    # def _mark_feature_radii(
-    #         self,
-    #         graph: BifurcationGraph(),
-    #         bader,
-    #         elf_grid: Grid,
-    #         voxel_labels: NDArray,
-    #         radius_refine_method: str,
-    #         ):
-        
-    #     valence_summary = self.get_valence_summary(graph)
-    #     for feature_idx, attributes in tqdm(valence_summary.items(), desc="Calculating feature radii"):
-    #         basins = attributes["basins"]
-    #         mask = np.isin(voxel_labels, basins)
-    #         feature_radius=self.get_min_surface_dist(
-    #             grid=elf_grid, 
-    #             mask=mask, 
-    #             bader=bader,
-    #             radius_refine_method=radius_refine_method
-    #             )
-    #         networkx.set_node_attributes(
-    #             graph, {feature_idx: {"feature_radius": feature_radius}}
-    #         )
-    #     return graph
         
     def _mark_bare_electron_indicator(
         self,
@@ -2098,14 +1978,12 @@ class ElfAnalyzerToolkit:
         return sorted_structure
 
     @classmethod
-    def from_files(
+    def from_vasp(
         cls,
         directory: Path = Path("."),
         elf_file: str = "ELFCAR",
         charge_file: str = "CHGCAR",
-        separate_spin: bool = False,
-        ignore_low_pseudopotentials: bool = False,
-        downscale_resolution: int = 200,
+        **kwargs,
     ):
         """
         Creates a BadElfToolkit instance from the requested partitioning file
@@ -2121,24 +1999,20 @@ class ElfAnalyzerToolkit:
             charge_file (str):
                 The filename of the file containing the charge information. Must
                 be a VASP CHGCAR file.
-            separate_spin (bool):
-                Whether to check for spin and provider results for both. If this
-                is False, only the first set of data in the provided files is
-                used.
+            **kwargs:
+                Any other keyword arguments to pass to the ElfAnalysisToolkit
 
         Returns:
             A ElfAnalyzerToolkit instance.
         """
 
-        elf_grid = Grid.from_file(directory / elf_file)
-        charge_grid = Grid.from_file(directory / charge_file)
+        elf_grid = Grid.from_vasp(directory / elf_file)
+        charge_grid = Grid.from_vasp(directory / charge_file)
         return ElfAnalyzerToolkit(
             elf_grid=elf_grid,
             charge_grid=charge_grid,
             directory=directory,
-            separate_spin=separate_spin,
-            ignore_low_pseudopotentials=ignore_low_pseudopotentials,
-            downscale_resolution=downscale_resolution,
+            **kwargs,
         )
 
     def get_full_analysis(self, write_results: bool = True, **kwargs):
@@ -2190,14 +2064,20 @@ class ElfAnalyzerToolkit:
                 "structure": structure,
             }
     
-    def write_feature_basins(self, bader, graph: BifurcationGraph(), nodes: list, file_pre:str = "ELFCAR"):
+    def write_feature_basins(
+            self, 
+            bader: Bader, 
+            graph: BifurcationGraph(), 
+            nodes: list, 
+            file_pre:str = "ELFCAR"
+            ):
         """
         For a give list of nodes, writes the bader basins associated with
         each.
         """
         for node in nodes:
             basins = graph.nodes[node]["basins"]
-            basin_labeled_voxels = bader.bader_volumes.copy()
+            basin_labeled_voxels = bader.basin_labels.copy()
             charge_mask = np.isin(basin_labeled_voxels, basins)
             charge = bader.charge
             empty_grid = np.zeros(charge.shape)

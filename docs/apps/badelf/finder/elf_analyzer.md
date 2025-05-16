@@ -18,7 +18,7 @@ The `ElfAnalyzerToolkit` class can be initialized from files or by providing the
     ``` python
     from simmate.apps.badelf.core import ElfAnalyzerToolkit
     
-    finder = ElfAnalyzerToolkit.from_files(
+    finder = ElfAnalyzerToolkit.from_vasp(
         directory="/path/to/folder", # This is the directory where the files are located
         # The parameters below are optional
         elf_file="partitioning_filename", # default ELFCAR
@@ -36,8 +36,8 @@ The `ElfAnalyzerToolkit` class can be initialized from files or by providing the
     from pathlib import Path
     
     directory = Path("path/to/folder") # indicates the path to the folder where BadELF should run
-    elf_grid = Grid.from_file("path/to/partitioning_file")
-    charge_grid = Grid.from_file("path/to/partitioning_file")
+    elf_grid = Grid.from_vasp("path/to/partitioning_file")
+    charge_grid = Grid.from_vasp("path/to/partitioning_file")
     
     finder = ElfAnalyzerToolkit(
         directory=directory,

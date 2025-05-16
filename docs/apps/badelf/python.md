@@ -14,11 +14,11 @@ Using the `BadElfToolkit` class requires two basic steps:
 
 ### (1) Initializing the BadElfToolkit class
 
-The BadElfToolkit class can be initialized with the `from_files` method:
+The BadElfToolkit class can be initialized with the `from_vasp` method:
 ``` python
 from simmate.apps.badelf.core import BadElfToolkit
 
-badelf = BadElfToolkit.from_files(
+badelf = BadElfToolkit.from_vasp(
     directory="/path/to/folder", # This is the directory where the files are located as well as the directory where BadELF will run
     partitioning_file="partitioning_filename", # e.g. ELFCAR
     charge_file="charge_filename", # e.g. CHGCAR
@@ -33,8 +33,8 @@ from simmate.apps.bader.toolkit import Grid
 from pathlib import Path
 
 directory = Path("path/to/folder") # indicates the path to the folder where BadELF should run
-partitioning_grid = Grid.from_file("path/to/partitioning_file")
-charge_grid = Grid.from_file("path/to/partitioning_file")
+partitioning_grid = Grid.from_vasp("path/to/partitioning_file")
+charge_grid = Grid.from_vasp("path/to/partitioning_file")
 
 badelf = BadElfToolkit(
     directory=directory,
