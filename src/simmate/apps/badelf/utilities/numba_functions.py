@@ -288,7 +288,7 @@ def get_near_grid_assignments(
         pointer_voxel_coords: NDArray[np.int64],
         voxel_indices: NDArray[np.int64],
         zero_grads: NDArray[np.bool_],
-        rgrid: NDArray[np.int64],
+        # rgrid: NDArray[np.int64],
         delta_rs: NDArray[np.float64],
         neighbors: NDArray[np.int64],
         neighbor_dists: NDArray[np.float64]
@@ -300,8 +300,6 @@ def get_near_grid_assignments(
     visited = np.empty((nx*ny*nz,3),dtype=np.int64)
     # Create array for storing maxima
     maxima_mask = np.zeros(data.shape, dtype=np.bool_)
-    # create array to update pointers to avoid repeat calculations in refinement
-    updated_pointer_voxel_coords = pointer_voxel_coords.copy()
     # create counter for number of maxima
     maxima_count = 1
     # iterate over all voxels, their pointers, and delta rs
@@ -332,7 +330,6 @@ def get_near_grid_assignments(
             path_len += 1
             # otherwise, we have no label. We assign our current maximum value
             assignments[i,j,k] = maxima_count
-            
             
             # Next we check if the rgrid step is 0 for this point.
             voxel_index = voxel_indices[i,j,k]
@@ -369,7 +366,6 @@ def get_near_grid_assignments(
                     total_dr = np.zeros(3, dtype=np.float64)
                     # move to next point
                     new_coord = current_coord + pointer
-                    updated_pointer_voxel_coords[voxel_index] = new_coord
             
             else:
                 # move to next point
@@ -383,86 +379,95 @@ def get_near_grid_assignments(
                 # adjust total diff
                 total_dr -= np.round(total_dr).astype(np.int64)
 
-            
             # Wrap our new coord and set it as our new coord
             ni = (new_coord[0]) % nx # Loop around box
             nj = (new_coord[1]) % ny
             nk = (new_coord[2]) % nz
             
-            # Make sure we aren't revisiting a coord in our path
+            # Make sure we aren't revisiting coords in our path
             new_label = assignments[ni,nj,nk]
             if new_label == maxima_count:
-                # fall back to ongrid step
-                best = 0.0
-                init_elf = data[i,j,k]
-                best_neighbor = -1
-                for shift_index, shift in enumerate(neighbors):
-                    # get the new neighbor
-                    ii = (i+shift[0]) % nx # Loop around box
-                    jj = (j+shift[1]) % ny
-                    kk = (k+shift[2]) % nz
-                    new_elf = data[ii,jj,kk]
-                    dist = neighbor_dists[shift_index]
-                    diff = (new_elf-init_elf) / dist
-                    if diff > best:
-                        best = diff
-                        best_neighbor = shift_index
-                
-                pointer = neighbors[best_neighbor]
-                # Reset our total dr since we've arrived at a point with
-                # zero gradient
+                # We start climbing with on-grid until we find a voxel that doesn't
+                # belong to this path. We also reset dr
                 total_dr = np.zeros(3, dtype=np.float64)
-                # move to next point
-                new_coord = current_coord + pointer
-                updated_pointer_voxel_coords[voxel_index] = new_coord
-                # wrap around indices
-                ni = (new_coord[0]) % nx # Loop around box
-                nj = (new_coord[1]) % ny
-                nk = (new_coord[2]) % nz                
+                temp_current_coord = current_coord.copy()
+                while True:
+                    ti, tj, tk = temp_current_coord
+                    new_label = assignments[ni,nj,nk]
+                    if new_label == maxima_count:
+                        # continue on grid steps
+                        best = 0.0
+                        init_elf = data[ti, tj, tk]
+                        best_neighbor = -1
+                        for shift_index, shift in enumerate(neighbors):
+                            # get the new neighbor
+                            ii = (ti+shift[0]) % nx # Loop around box
+                            jj = (tj+shift[1]) % ny
+                            kk = (tk+shift[2]) % nz
+                            new_elf = data[ii,jj,kk]
+                            dist = neighbor_dists[shift_index]
+                            diff = (new_elf-init_elf) / dist
+                            if diff > best:
+                                best = diff
+                                best_neighbor = shift_index
+                        
+                        pointer = neighbors[best_neighbor]
+                        # move to next point
+                        new_coord = current_coord + pointer
+                        # update the pointer for this voxel to avoid repeat calc
+                        
+                        # wrap around indices
+                        ni = (new_coord[0]) % nx # Loop around box
+                        nj = (new_coord[1]) % ny
+                        nk = (new_coord[2]) % nz
+                        temp_current_coord = np.array((ni,nj,nk),dtype=np.int64)
+                    else:
+                        # we have reached a voxel outside the current path.
+                        break
             
             current_coord = np.array((ni,nj,nk),dtype=np.int64)
-    return assignments, updated_pointer_voxel_coords, maxima_mask
+    return assignments, maxima_mask
 
-@njit(parallel=True, cache=True)
-def refine_near_grid_edges(
-        assignments: NDArray[np.int64],
-        edge_voxel_coords: NDArray[np.int64],
-        pointer_voxel_coords:NDArray[np.int64],
-        voxel_indices: NDArray[np.int64],
-        delta_rs: NDArray[np.float64],
-        ):
-    nx,ny,nz = assignments.shape
-    refined_assignments = assignments.copy()
-    # loop over edges
-    for edge_index in prange(len(edge_voxel_coords)):
-        initial_coords = edge_voxel_coords[edge_index]
-        current_coord = edge_voxel_coords[edge_index]
-        # start tracking dr
-        total_dr = np.zeros(3, dtype=np.float64)
-        # start hill climbing
-        while True:
-            i,j,k = current_coord
-            label = assignments[i,j,k]
+# @njit(parallel=True, cache=True)
+# def refine_near_grid_edges(
+#         assignments: NDArray[np.int64],
+#         edge_voxel_coords: NDArray[np.int64],
+#         pointer_voxel_coords:NDArray[np.int64],
+#         voxel_indices: NDArray[np.int64],
+#         delta_rs: NDArray[np.float64],
+#         ):
+#     nx,ny,nz = assignments.shape
+#     refined_assignments = assignments.copy()
+#     # loop over edges
+#     for edge_index in prange(len(edge_voxel_coords)):
+#         initial_coords = edge_voxel_coords[edge_index]
+#         current_coord = edge_voxel_coords[edge_index]
+#         # start tracking dr
+#         total_dr = np.zeros(3, dtype=np.float64)
+#         # start hill climbing
+#         while True:
+#             i,j,k = current_coord
+#             label = assignments[i,j,k]
             
-            # check if this is a labeled voxel
-            if label != 0:
-                # we want to label our initial coord and break
-                refined_assignments[initial_coords[0], initial_coords[1], initial_coords[2]] = label
-                break
-            # otherwise, we want to keep climbing
-            voxel_index = voxel_indices[i,j,k]
-            # get the next voxel
-            new_coord = pointer_voxel_coords[voxel_index]
-            dr = delta_rs[voxel_index]
-            total_dr += dr 
-            # adjust based on total diff
-            new_coord += np.round(total_dr).astype(np.int64)
-            # adjust total diff
-            total_dr -= np.round(total_dr).astype(np.int64)
-            # wrap around the edges
-            ni = (new_coord[0]) % nx # Loop around box
-            nj = (new_coord[1]) % ny
-            nk = (new_coord[2]) % nz    
-            # mark as current voxel
-            current_coord = np.array((ni,nj,nk),dtype=np.int64)
-    return refined_assignments
+#             # check if this is a labeled voxel
+#             if label != 0:
+#                 # we want to label our initial coord and break
+#                 refined_assignments[initial_coords[0], initial_coords[1], initial_coords[2]] = label
+#                 break
+#             # otherwise, we want to keep climbing
+#             voxel_index = voxel_indices[i,j,k]
+#             # get the next voxel
+#             new_coord = pointer_voxel_coords[voxel_index]
+#             dr = delta_rs[voxel_index]
+#             total_dr += dr 
+#             # adjust based on total diff
+#             new_coord += np.round(total_dr).astype(np.int64)
+#             # adjust total diff
+#             total_dr -= np.round(total_dr).astype(np.int64)
+#             # wrap around the edges
+#             ni = (new_coord[0]) % nx # Loop around box
+#             nj = (new_coord[1]) % ny
+#             nk = (new_coord[2]) % nz    
+#             # mark as current voxel
+#             current_coord = np.array((ni,nj,nk),dtype=np.int64)
+#     return refined_assignments
