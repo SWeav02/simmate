@@ -21,7 +21,8 @@ from tqdm import tqdm
 from simmate.apps.badelf.core.elf_analyzer import ElfAnalyzerToolkit
 from simmate.apps.badelf.core.partitioning import PartitioningToolkit
 from simmate.apps.badelf.core.voxel_assignment import VoxelAssignmentToolkit
-from simmate.apps.bader.toolkit import Grid, Bader
+from simmate.apps.bader.toolkit import Grid
+from simmate.apps.badelf.core.warren_bader import Bader
 from simmate.toolkit import Structure
 
 

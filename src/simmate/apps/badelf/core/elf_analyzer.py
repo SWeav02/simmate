@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 from pymatgen.analysis.local_env import CrystalNN
 
 from simmate.apps.badelf.core.partitioning import PartitioningToolkit
-from simmate.apps.badelf.core import Bader
+from simmate.apps.badelf.core.warren_bader import Bader
 from simmate.apps.badelf.utilities import UnionFind, BifurcationGraph
 from simmate.apps.bader.toolkit import Grid
 from simmate.toolkit import Structure

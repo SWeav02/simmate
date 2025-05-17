@@ -9,7 +9,6 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
-from pybader.interface import Bader
 from pymatgen.analysis.local_env import CrystalNN
 from scipy.interpolate import RegularGridInterpolator
 from scipy.signal import savgol_filter
@@ -17,6 +16,7 @@ from scipy.spatial import ConvexHull
 from tqdm import tqdm
 
 from simmate.apps.bader.toolkit import Grid
+from simmate.apps.badelf.core.warren_bader import Bader
 from simmate.toolkit import Structure
 
 
@@ -72,7 +72,7 @@ class PartitioningToolkit:
         # TODO: add option to cut out a small portion of the grid surrounding the
         # bond.
         grid_data = self.grid.copy().total
-        label_data = self.bader.atoms_volumes
+        label_data = self.bader.atom_labels
         slope = [b - a for a, b in zip(site_voxel_coord, neigh_voxel_coord)]
         slope_increment = [float(x) / steps for x in slope]
 
