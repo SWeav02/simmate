@@ -517,26 +517,34 @@ class Grid(VolumetricData):
             # Read the rest of the file as a single string to avoid Python loop overhead
             # Read the remainder of the file as a single string
             rest = f.read()
+            # Now we split the file at the next line that has the ngrid if it
+            # exists
+            data_strings = rest.split(f"{nx}  {ny}  {nz}")
             
-            # Truncate everything after the word "augmentation"
-            cutoff_index = rest.lower().find("augmentation")
-            if cutoff_index != -1:
-                rest = rest[:cutoff_index]
-            
-            # Split into values and convert to float
-            data_array = np.fromiter((float(x) for x in rest.split()), dtype=float)
-            
-            if len(data_array) > ngrid:
-                delete_indices = np.arange(ngrid, ngrid+3)
-                data_array = np.delete(data_array, delete_indices)
+            data = []
+            for data_string in data_strings:
+                # Truncate everything after the word "augmentation"
+                cutoff_index = data_string.lower().find("augmentation")
+                if cutoff_index != -1:
+                    data_string = data_string[:cutoff_index]
+                # Split into values and convert to float
+                data_array = np.fromiter((float(x) for x in data_string.split()), dtype=float)
+                
+                # remove shape line if necessary
+                if len(data_array) > ngrid:
+                    delete_indices = np.arange(ngrid, ngrid+3)
+                    data_array = np.delete(data_array, delete_indices)
+                
+                data.append(data_array)
             
             # Fast check for spin-polarized case
-            if len(data_array) == ngrid:
+            if len(data) == 1:
+                data_array=data[0]
                 total = data_array.reshape((nx, ny, nz), order='F')
                 data = {"total": total}
-            elif len(data_array) == 2 * ngrid:
-                total = data_array[:ngrid].reshape((nx, ny, nz), order='F')
-                diff = data_array[ngrid:].reshape((nx, ny, nz), order='F')
+            elif len(data) == 2:
+                total = data[0].reshape((nx, ny, nz), order='F')
+                diff = data[1].reshape((nx, ny, nz), order='F')
                 data = {"total": total, "diff": diff}
             else:
                 raise ValueError("Unexpected number of data points: does not match grid size.")
