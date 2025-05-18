@@ -451,7 +451,7 @@ class Grid(VolumetricData):
         )
 
     @classmethod
-    def from_file(cls, grid_file: str | Path):
+    def from_vasp(cls, grid_file: str | Path):
         """Create a grid instance using a CHGCAR or ELFCAR file. This uses
         pymatgens implementation of loading a VASP grid and is usually
         slower than the 'from_vasp' method.
@@ -470,86 +470,86 @@ class Grid(VolumetricData):
 
         return Grid(poscar.structure, data)
     
-    @classmethod
-    def from_vasp(cls, filename: str | Path):
-        """
-        Create a grid instance using a CHGCAR or ELFCAR file
+    # @classmethod
+    # def from_vasp(cls, filename: str | Path):
+    #     """
+    #     Create a grid instance using a CHGCAR or ELFCAR file
         
-        Args:
-            filename (string):
-                The file the instance should be made from. Should be a VASP
-                CHGCAR or ELFCAR type file.
+    #     Args:
+    #         filename (string):
+    #             The file the instance should be made from. Should be a VASP
+    #             CHGCAR or ELFCAR type file.
 
-        Returns:
-            Grid from the specified file.
-        """
-        # ensure we have a path object
-        filename = Path(filename)
-        with open(filename, 'r') as f:
-            # Read header lines first
-            next(f)  # line 0
-            scale = float(next(f).strip())  # line 1
+    #     Returns:
+    #         Grid from the specified file.
+    #     """
+    #     # ensure we have a path object
+    #     filename = Path(filename)
+    #     with open(filename, 'r') as f:
+    #         # Read header lines first
+    #         next(f)  # line 0
+    #         scale = float(next(f).strip())  # line 1
         
-            lattice_matrix = np.array([[float(x) for x in next(f).split()] for _ in range(3)]) * scale
+    #         lattice_matrix = np.array([[float(x) for x in next(f).split()] for _ in range(3)]) * scale
         
-            atom_types = next(f).split()
-            atom_counts = list(map(int, next(f).split()))
-            total_atoms = sum(atom_counts)
+    #         atom_types = next(f).split()
+    #         atom_counts = list(map(int, next(f).split()))
+    #         total_atoms = sum(atom_counts)
         
-            # Skip the 'Direct' or 'Cartesian' line
-            next(f)
+    #         # Skip the 'Direct' or 'Cartesian' line
+    #         next(f)
         
-            coords = np.array([
-                list(map(float, next(f).split()))
-                for _ in range(total_atoms)
-            ])
+    #         coords = np.array([
+    #             list(map(float, next(f).split()))
+    #             for _ in range(total_atoms)
+    #         ])
         
-            lattice = Lattice(lattice_matrix)
-            atom_list = [elem for typ, count in zip(atom_types, atom_counts) for elem in [typ]*count]
-            structure = Structure(lattice=lattice, species=atom_list, coords=coords)
+    #         lattice = Lattice(lattice_matrix)
+    #         atom_list = [elem for typ, count in zip(atom_types, atom_counts) for elem in [typ]*count]
+    #         structure = Structure(lattice=lattice, species=atom_list, coords=coords)
         
-            # Read the FFT grid line
-            # skip empty line
-            next(f)
-            nx, ny, nz = map(int, next(f).split())
-            ngrid = nx * ny * nz
+    #         # Read the FFT grid line
+    #         # skip empty line
+    #         next(f)
+    #         nx, ny, nz = map(int, next(f).split())
+    #         ngrid = nx * ny * nz
         
-            # Read the rest of the file as a single string to avoid Python loop overhead
-            # Read the remainder of the file as a single string
-            rest = f.read()
-            # Now we split the file at the next line that has the ngrid if it
-            # exists
-            data_strings = rest.split(f"{nx}  {ny}  {nz}")
+    #         # Read the rest of the file as a single string to avoid Python loop overhead
+    #         # Read the remainder of the file as a single string
+    #         rest = f.read()
+    #         # Now we split the file at the next line that has the ngrid if it
+    #         # exists
+    #         data_strings = rest.split(f"{nx}  {ny}  {nz}")
             
-            data = []
-            for data_string in data_strings:
-                # Truncate everything after the word "augmentation"
-                cutoff_index = data_string.lower().find("augmentation")
-                if cutoff_index != -1:
-                    data_string = data_string[:cutoff_index]
-                # Split into values and convert to float
-                data_array = np.fromiter((float(x) for x in data_string.split()), dtype=float)
+    #         data = []
+    #         for data_string in data_strings:
+    #             # Truncate everything after the word "augmentation"
+    #             cutoff_index = data_string.lower().find("augmentation")
+    #             if cutoff_index != -1:
+    #                 data_string = data_string[:cutoff_index]
+    #             # Split into values and convert to float
+    #             data_array = np.fromiter((float(x) for x in data_string.split()), dtype=float)
                 
-                # remove shape line if necessary
-                if len(data_array) > ngrid:
-                    delete_indices = np.arange(ngrid, ngrid+3)
-                    data_array = np.delete(data_array, delete_indices)
+    #             # remove shape line if necessary
+    #             if len(data_array) > ngrid:
+    #                 delete_indices = np.arange(ngrid, ngrid+3)
+    #                 data_array = np.delete(data_array, delete_indices)
                 
-                data.append(data_array)
+    #             data.append(data_array)
             
-            # Fast check for spin-polarized case
-            if len(data) == 1:
-                data_array=data[0]
-                total = data_array.reshape((nx, ny, nz), order='F')
-                data = {"total": total}
-            elif len(data) == 2:
-                total = data[0].reshape((nx, ny, nz), order='F')
-                diff = data[1].reshape((nx, ny, nz), order='F')
-                data = {"total": total, "diff": diff}
-            else:
-                raise ValueError("Unexpected number of data points: does not match grid size.")
+    #         # Fast check for spin-polarized case
+    #         if len(data) == 1:
+    #             data_array=data[0]
+    #             total = data_array.reshape((nx, ny, nz), order='F')
+    #             data = {"total": total}
+    #         elif len(data) == 2:
+    #             total = data[0].reshape((nx, ny, nz), order='F')
+    #             diff = data[1].reshape((nx, ny, nz), order='F')
+    #             data = {"total": total, "diff": diff}
+    #         else:
+    #             raise ValueError("Unexpected number of data points: does not match grid size.")
         
-        return Grid(structure, data)
+    #     return Grid(structure, data)
 
     def get_atoms_in_volume(self, volume_mask):
         """

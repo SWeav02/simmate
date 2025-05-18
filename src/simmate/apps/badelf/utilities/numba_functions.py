@@ -140,7 +140,7 @@ def get_steepest_pointers(
 @njit(parallel=True, cache=True)
 def get_neighbor_flux(
         data: NDArray[np.float64], 
-        sorted_coords: NDArray[np.int64],
+        sorted_voxel_coords: NDArray[np.int64],
         voxel_indices: NDArray[np.int64],
         neighbor_transforms: NDArray[np.int64],
         neighbor_dists: NDArray[np.float64],
@@ -161,8 +161,8 @@ def get_neighbor_flux(
     # create a mask for the location of maxima
     maxima_mask = np.zeros(nx*ny*nz, dtype=np.bool_)
     # Loop over each voxel in parallel
-    for coord_index in prange(len(sorted_coords)):
-        i,j,k = sorted_coords[coord_index]
+    for coord_index in prange(len(sorted_voxel_coords)):
+        i,j,k = sorted_voxel_coords[coord_index]
         # get the initial value
         base_value = data[i,j,k]
         # iterate over each neighbor sharing a voronoi facet
@@ -192,39 +192,193 @@ def get_neighbor_flux(
     return flux_array, neigh_array, maxima_mask
 
 
+# @njit(fastmath=True, cache=True)
+# def get_basin_weights(
+#     flux_array: NDArray[np.float64], 
+#     neigh_indices_array: NDArray[np.int64], 
+#     # flat_charge_array: NDArray[np.float64],
+#     # voxel_volume: np.float64,
+#     maxima_num: types.int64
+# ):
+#     # get the length of our voxel array and create an empty array for storing
+#     # data as we collect it
+#     n_voxels = flux_array.shape[0]
+#     weight_array = np.zeros((n_voxels, maxima_num), dtype=np.float64)
+#     # Create arrays for storing charge and volume assignments so we don't have
+#     # to do a loop again later
+#     # charge_array = np.zeros(maxima_num, dtype=np.float64)
+#     # volume_array = np.zeros(maxima_num, dtype=np.float64)
+#     # create array for storing labels
+    
+#     # create counter for maxima
+#     maxima = 0
+#     # iterate over our voxels. We assume voxels are ordered from highest to lowest
+#     # data
+#     for i in range(n_voxels):
+#         neighbors = neigh_indices_array[i]
+#         # charge = flat_charge_array[i]
+#         # Our neighbor indices array is -1 where the neighbors are lower. Maxima
+#         # correspond to where this is true for all neighbors
+#         if np.all(neighbors<0):
+#             # Give this maxima a weight of 1
+#             weight_array[i, maxima] = 1.0
+#             # update our charge and volume arrays
+#             # charge_array[maxima] += charge
+#             # volume_array[maxima] += voxel_volume
+#             # note we have a maxima
+#             maxima += 1
+#             continue
+#         # Otherwise we are at either an interior or edge voxel.
+#         # Get a mask where there are neighbors in this row (those that are above -1)
+#         mask  = neigh_indices_array[i, :] >= 0
+#         # Get the relavent neighbors and flux flowing into them
+#         fluxes = flux_array[i, mask]
+#         # Get the sum of each current_flux*neighbor_flux for each basin and
+#         weight_row = fluxes @ weight_array[neighbors[mask]]
+#         # Update the charge and volume arrays
+#         # charge_array = charge_array + weight_row*charge
+#         # volume_array = volume_array + weight_row*voxel_volume
+#         # update the weight array
+#         weight_array[i] = weight_row
+
+#     return weight_array#, charge_array, volume_array
+
 @njit(fastmath=True, cache=True)
-def get_basin_weights(
-    flux_array: NDArray[np.float64], 
-    neigh_indices_array: NDArray[np.int64], 
-    maxima_num: types.int64
-):
+def get_single_weight_voxels(
+        neigh_indices_array: NDArray[np.int64], 
+        sorted_voxel_coords: NDArray[np.int64],
+        data: NDArray[np.float64],
+        maxima_num: np.int64,
+        sorted_flat_charge_data: NDArray[np.float64],
+        voxel_volume: np.float64,
+        assignments: NDArray[np.int64] = None,
+        ):
+    """
+    Loops over voxels to find any that have exaclty one weight. We store
+    these in a single array the size of the assignments to reduce space
+    """
     # get the length of our voxel array and create an empty array for storing
     # data as we collect it
-    n_voxels = flux_array.shape[0]
-    weight_array = np.zeros((n_voxels, maxima_num), dtype=np.float64)
+    n_voxels = neigh_indices_array.shape[0]
+    # create assignments array
+    if assignments is None:
+        assignments = np.full(data.shape, -1, dtype=np.int64)
+    # create an array to note which of our sorted indices are unassigned
+    unassigned_mask = np.zeros(n_voxels, dtype=np.bool_)
+    # create arrays for storing volumes and charges
+    charge_array = np.zeros(maxima_num, dtype=np.float64)
+    volume_array = np.zeros(maxima_num, dtype=np.float64)
     # create counter for maxima
     maxima = 0
-    # iterate over our voxels. We assume voxels are ordered from highest to lowest
-    # data
-    for i in range(n_voxels):
-        neighbors = neigh_indices_array[i]
-        # Our neighbor indices array is -1 where the neighbors are lower. Maxima
-        # correspond to where this is true for all neighbors
+    # loop over voxels
+    for vox_idx in range(n_voxels):
+        neighbors = neigh_indices_array[vox_idx]
+        charge = sorted_flat_charge_data[vox_idx]
         if np.all(neighbors<0):
-            # Give this maxima a weight of 1
-            weight_array[i, maxima] = 1.0
-            # note we have a maxima
-            maxima += 1
+            # we have a maximum and assign it to its own label.
+            # NOTE: We first check if the assignment already has a label. We do
+            # this because our hybrid weight method assigns maxima beforehand
+            i,j,k = sorted_voxel_coords[vox_idx]
+            maxima_assignment = assignments[i,j,k]
+            if maxima_assignment == -1:
+                assignments[i,j,k] = maxima
+                # assign charge and volume
+                charge_array[maxima] += charge
+                volume_array[maxima] += voxel_volume
+                # increase our maxima counter
+                maxima += 1
+            else:
+                # just assign charge and volume
+                charge_array[maxima_assignment] += charge
+                volume_array[maxima_assignment] += voxel_volume
             continue
-        # Otherwise we are at either an interior or edge voxel.
-        # Get a mask where there are neighbors in this row (those that are above -1)
-        mask  = neigh_indices_array[i, :] >= 0
-        # Get the relavent neighbors and flux flowing into them
-        fluxes = flux_array[i, mask]
-        # Get the sum of each current_flux*neighbor_flux for each basin and
-        weight_array[i] = fluxes @ weight_array[neighbors[mask]]
+        # otherwise we check each neighbor and check its assignment
+        current_label = -1
+        label_num = 0
+        for neigh in neighbors:
+            if neigh == -1:
+                continue
+            # get this neighbors assignment
+            ni, nj, nk = sorted_voxel_coords[neigh]
+            neigh_label = assignments[ni,nj,nk]
+            # If the label exists and is new, update our label count
+            if neigh_label != current_label and neigh_label != -1:
+                current_label = neigh_label
+                label_num += 1
+        # if we only have one label, update our assignment
+        if label_num == 1:
+            i,j,k = sorted_voxel_coords[vox_idx]
+            assignments[i,j,k] = current_label
+            # assign charge and volume
+            charge_array[current_label] += charge
+            volume_array[current_label] += voxel_volume
+        else:
+            unassigned_mask[vox_idx] = True
+    return assignments, unassigned_mask, charge_array, volume_array
 
-    return weight_array
+@njit(fastmath=True, cache=True)
+def get_multi_weight_voxels(
+        flux_array: NDArray[np.float64], 
+        neigh_indices_array: NDArray[np.int64], 
+        assignments: NDArray[np.int64],
+        unass_to_vox_pointer: NDArray[np.int64],
+        vox_to_unass_pointer: NDArray[np.int64],
+        sorted_voxel_coords: NDArray[np.int64],
+        charge_array: NDArray[np.float64], 
+        volume_array: NDArray[np.float64], 
+        sorted_flat_charge_data: NDArray[np.float64], 
+        voxel_volume: np.float64,
+        maxima_num: np.int64,
+        ):
+    # create weight array
+    weight_array = np.zeros((len(unass_to_vox_pointer), maxima_num), dtype=np.float64)
+    # create a new assignments array to store updated assignments
+    new_assignments = assignments.copy()
+    # create a scratch weight array to store rows in
+    scratch_weight_array = np.empty(weight_array.shape[1], dtype=np.float64)
+    for unass_idx, vox_idx in enumerate(unass_to_vox_pointer):
+        # zero out our weight array
+        scratch_weight_array[:] = 0.0
+        # get the important neighbors and their fraction of flow from this vox
+        neighbors = neigh_indices_array[vox_idx]
+        fracs = flux_array[vox_idx]
+        for neighbor, frac in zip(neighbors, fracs):
+            # skip if no neighbor
+            if neighbor < 0:
+                continue
+            # otherwise we get the assignments and fraction of assignments for
+            # this voxel. First check if it is a single weight assignment
+            ni, nj, nk = sorted_voxel_coords[neighbor]
+            assignment = assignments[ni,nj,nk]
+            if assignment != -1:
+                # assign the current frac to this basin
+                scratch_weight_array[assignment] += frac
+                continue
+            # otherwise, this is another multi weight assignment.
+            neigh_unass_idx = vox_to_unass_pointer[neighbor]
+            neigh_weights = weight_array[neigh_unass_idx]
+            for assignment, weight in enumerate(neigh_weights):
+                scratch_weight_array[assignment] += weight * frac
+        # assign label, charge, and volume
+        best_weight = 0.0
+        best_label = -1
+        charge = sorted_flat_charge_data[vox_idx]
+        for label, weight in enumerate(scratch_weight_array):
+            # skip if there is no weight
+            if weight == 0.0:
+                continue
+            # update charge and volume
+            charge_array[label] += weight*charge
+            volume_array[label] += weight*voxel_volume
+            if weight > best_weight:
+                best_weight = weight
+                best_label = label
+        # update assignment
+        i,j,k = sorted_voxel_coords[vox_idx]
+        new_assignments[i,j,k] = best_label
+        # assign this weight row
+        weight_array[unass_idx] = scratch_weight_array
+    return new_assignments, charge_array, volume_array
 
 @njit(fastmath=True, cache=True)
 def get_hybrid_basin_weights(
@@ -252,30 +406,92 @@ def get_hybrid_basin_weights(
         weight_array[i] = fluxes @ weight_array[neighbors[mask]]
 
     return weight_array
+# !!! The following code is older, but uses multiple smaller arrays to reduce
+# memory. It may work if voxels with multiple weights are never split to more
+# than 26 neighbors but I need to test this. The case where this may not be
+# true is if multiple neighbors themselves split to many different basins.
+# @njit(fastmath=True, cache=True)
+# def get_basin_weights_alt(
+#     flux_array: NDArray[np.float64], 
+#     neigh_indices_array: NDArray[np.int64], 
+#     maxima_num: np.int64,
+#     flat_charge_array: NDArray[np.float64], 
+#     voxel_volume: np.float64,
+# ):
+#     # get the length of our voxel array and create an empty array for storing
+#     # data as we collect it
+#     n_voxels = flux_array.shape[0]
+#     # n_neighs = flux_array.shape[1]
+#     # NOTE: 26 is not guaranteed, but seems like a reasonable max.
+#     label_array = np.empty((n_voxels, 26), dtype=np.int64)
+#     frac_array = np.empty((n_voxels, 26), dtype=np.float64)
+#     label_num_array = np.empty(n_voxels, dtype=np.int64)
+#     # create arrays for storing volumes and charges
+#     charge_array = np.zeros(maxima_num, dtype=np.float64)
+#     volume_array = np.zeros(maxima_num, dtype=np.float64)
+#     # create assignment array
+#     assignments_1d = np.empty(n_voxels, dtype=np.int64)
+#     # create counter for maxima
+#     maxima = 0
+#     # create scratch for temporary label array
+#     scratch_label_array = np.zeros(maxima_num, dtype=np.float64)
+#     # iterate over our voxels. We assume voxels are ordered from highest to lowest
+#     # data
+#     for i in range(n_voxels):
+#         neighbors = neigh_indices_array[i]
+#         charge = flat_charge_array[i]
 
-
-@njit(parallel=True, cache=True)
-def get_weighted_voxel_assignments(
-        weight_array: NDArray[np.float64], 
-        sorted_coords: NDArray[np.int64],
-        data: NDArray[np.float64],
-        ):
-    """
-    Calculates the charge and volume that should be assigned to each
-    basin from the weight for each voxel
-    """
-    # create the assignment array to label each voxel
-    assignments = np.zeros(data.shape, dtype=np.int64)
-    # loop over each voxel
-    for voxel_index in prange(len(sorted_coords)):
-        x,y,z = sorted_coords[voxel_index]
-        weights = weight_array[voxel_index]
-        # get the unique_weights
-        max_weight = weights.max()
-        for basin_index, weight in enumerate(weights):
-            if weight == max_weight:
-                assignments[x,y,z] = basin_index
-    return assignments
+#         # Our neighbor indices array is -1 where the neighbors are lower. Maxima
+#         # correspond to where this is true for all neighbors
+#         if np.all(neighbors<0):
+#             # Assign one label to this voxel
+#             label_array[i,0] = maxima
+#             frac_array[i,0] = 1.0
+#             label_num_array[i] = 1
+#             # assign charge and volume
+#             charge_array[maxima] += charge
+#             volume_array[maxima] += voxel_volume
+#             # assign label
+#             assignments_1d[i] = maxima
+#             # note we have a new maxima
+#             maxima += 1
+#             continue
+#         # Otherwise we are at either an interior or edge voxel.
+#         # reset scratch array
+#         scratch_label_array[:] = 0.0
+#         fracs = flux_array[i] # fraction of each neighbor this voxel flows to
+#         for frac, neighbor in zip(fracs, neighbors):
+#             if not neighbor == -1:
+#                 # get this neighbors weight info
+#                 neigh_labels = label_array[neighbor]
+#                 neigh_fracs = frac_array[neighbor] # fraction of each basin this neighbor flows to
+#                 neigh_label_num = label_num_array[neighbor]
+#                 # assert neigh_label_num != 0, f"{neighbor}"
+#                 # loop over each label in this neighbor
+#                 for j in range(neigh_label_num):
+#                     l = neigh_labels[j]
+#                     f = neigh_fracs[j]
+#                     new_weight = f*frac + scratch_label_array[l]
+#                     scratch_label_array[l] = new_weight # add a fraction of this neighbors weight
+#         # assign the fractions in the temporary label array
+#         label_num = 0
+#         best_label = -1
+#         best_frac = 0.0
+#         for label, frac in enumerate(scratch_label_array):
+#             if frac != 0:
+#                 # assign label and frac
+#                 label_array[i, label_num] = label
+#                 frac_array[i, label_num] = frac
+#                 label_num += 1
+#                 # assign charge, volume
+#                 charge_array[label] += frac*charge
+#                 volume_array[label] += frac*voxel_volume
+#                 if frac > best_frac:
+#                     best_frac = frac
+#                     best_label = label
+#         label_num_array[i] = label_num
+#         assignments_1d[i] = best_label
+#     return label_array, frac_array, label_num_array, charge_array, volume_array, assignments_1d
 
 ###############################################################################
 # Functions for near grid method

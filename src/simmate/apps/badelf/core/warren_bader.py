@@ -5,17 +5,14 @@ import numpy as np
 from simmate.toolkit import Structure
 from simmate.apps.bader.toolkit import Grid
 from simmate.apps.badelf.utilities import (
-    get_connected_maxima,
     get_steepest_pointers,
     get_edges,
     get_basin_charge_volume_from_label,
-    get_basin_charge_volume_from_weights,
     get_near_grid_assignments,
-    get_weighted_voxel_assignments,
+    get_single_weight_voxels,
+    get_multi_weight_voxels,
     get_neighbor_flux,
-    get_basin_weights,
-    # get_hybrid_basin_weights,
-    # refine_near_grid_edges,
+    get_hybrid_basin_weights,
     )
 from itertools import product
 from numpy.typing import NDArray
@@ -52,9 +49,6 @@ class Bader:
         self._basin_maxima_frac = None
         self._basin_charges = None
         self._basin_volumes = None
-        self._basin_weights = None
-        self._basin_weight_voxels = None
-        self._basin_weight_voxels_1d = None
         self._basin_surface_distances = None
         # Assigned by run_atom_assignment
         self._basin_atoms = None
@@ -104,26 +98,6 @@ class Bader:
         if self._basin_volumes is None:
             self.run_bader()
         return self._basin_volumes
-    
-    @property
-    def basin_weights(self) -> NDArray[np.float64]:
-        """
-        A 2D array where each entry represents a weight and the indices
-        i, j represent the voxel index and basin index respectively.
-        """
-        if self._basin_weights is None and self.method == "weight":
-            self.run_bader()
-        return self._basin_weights
-    
-    @property
-    def basin_weight_voxels(self) -> (NDArray[np.int64], NDArray[np.int64]):
-        """
-        A 2D array the same length as the basin_weights representing
-        the 3D and 1D voxel indices that each row belongs to
-        """
-        if self._basin_volumes is None and self.method == "weight":
-            self.run_bader()
-        return self._basin_weight_voxels, self._basin_weight_voxels_1d
     
     @property
     def basin_surface_distances(self) -> NDArray[np.float64]:
@@ -238,7 +212,7 @@ class Bader:
             self._run_bader_weight()
         
         elif self.method == "hybrid-weight":
-            self._run_bader_hybrid_weight()
+            self._run_bader_weight(hybrid=True)
         
         else:
             raise ValueError(
@@ -445,7 +419,7 @@ class Bader:
     #     basin_charges /= self.charge_grid.shape.prod()
     #     self._basin_charges, self._basin_volumes = basin_charges, basin_volumes
     
-    def _run_bader_weight(self):
+    def _run_bader_weight(self, hybrid: bool = False):
         """
         Assigns basin weights to each voxel and assigns charge using
         the weight method:
@@ -476,139 +450,120 @@ class Bader:
         sorted_voxel_coords = flat_voxel_coords[sorted_data_indices]
         # Get the flux of volume from each voxel to its neighbor
         logging.info("Calculating voxel flux contributions")
-        flux_array, neigh_index_array, maxima_mask = get_neighbor_flux(
+        flux_array, neigh_indices_array, maxima_mask = get_neighbor_flux(
             data=data, 
-            sorted_coords=sorted_voxel_coords.copy(), 
+            sorted_voxel_coords=sorted_voxel_coords.copy(), 
             voxel_indices=sorted_voxel_indices, 
             neighbor_transforms=neighbor_transforms, 
             neighbor_dists=neighbor_dists, 
             facet_areas=facet_areas)
         # get the frac coords of the maxima
         maxima_vox_coords = sorted_voxel_coords[maxima_mask]
-        maxima_frac_coords = reference_grid.get_frac_coords_from_vox(maxima_vox_coords)
-        maxima_num = len(maxima_frac_coords)
-        self._basin_maxima_frac = maxima_frac_coords
+        # maxima_frac_coords = reference_grid.get_frac_coords_from_vox(maxima_vox_coords)
+        maxima_num = len(maxima_vox_coords)
         # Calculate the weights for each voxel to each basin
-        logging.info("Calculating weights")
-        weights_array = get_basin_weights(
-            flux_array=flux_array,
-            neigh_indices_array=neigh_index_array,
-            maxima_num = maxima_num
-            )
-        self._basin_weights = weights_array.copy()
-        self._basin_weight_voxels = sorted_voxel_coords.copy()
-        self._basin_weight_voxels_1d = flat_sorted_voxel_indices.copy()
-        logging.info("Calculating basin charges and volumes")
+        logging.info("Calculating weights, charges, and volumes")
+        # get charge and volume info
         charge_data = self.charge_grid.total
         flat_charge_data = charge_data.ravel()
         sorted_flat_charge_data = flat_charge_data[sorted_data_indices]
         voxel_volume = reference_grid.voxel_volume
-        # get the charges and volumes
-        charges, volumes = get_basin_charge_volume_from_weights(
-            weight_array=weights_array.copy(),
-            flat_charge_array=sorted_flat_charge_data,
-            voxel_volume=voxel_volume,
-            )
+        
+        # If we are using the hybrid method, we first assign maxima based on
+        # their 26 neighbors rather than the reduced voxel ones
+        if hybrid:
+            logging.info("Reducing maxima")
+            # get an array where each entry is that voxels unique label
+            initial_labels = np.arange(np.prod(shape)).reshape(shape)
+            # get shifts to move from a voxel to the 26 surrounding voxels
+            all_neighbor_transforms = np.array([s for s in product([-1,0,1], repeat=3) if s != (0,0,0)])
+            # get distance from each voxel to its neighbor in cartesian coordinates. This
+            # allows us to normalize the gradients
+            cartesian_shifts = reference_grid.get_cart_coords_from_vox(all_neighbor_transforms)
+            cartesian_dists = np.linalg.norm(cartesian_shifts, axis=1)
+            best_label = get_steepest_pointers(
+                data=data, 
+                initial_labels=initial_labels, 
+                neighbor_transforms=all_neighbor_transforms,
+                neighbor_dists=cartesian_dists,
+                )
+            # ravel the best labels to get a 1D array pointing from each voxel to its steepest
+            # neighbor
+            pointers = best_label.ravel()
+            # Our pointers object is a 1D array pointing each voxel to its parent voxel. We
+            # essentially have a classic forrest of trees problem where each maxima is
+            # a root and we want to point all of our voxels to their respective root.
+            # We being a while loop. In each loop, we remap our pointers to point at
+            # the index that its parent was pointing at.
+            while True:
+                # reassign each index to the value at the index it is pointing to
+                new_parents = pointers[pointers] 
+                # check if we have the same value as before
+                if np.all(new_parents == pointers):
+                    break
+                # if not, relabel our pointers
+                pointers = new_parents
+            # before reorganizing, update the voxel coords
+            new_maxima_mask = pointers.reshape(data.shape) == initial_labels
+            maxima_vox_coords = np.argwhere(new_maxima_mask)
+            # reorganize by maxima
+            pointers = pointers[sorted_data_indices]
+            maxima_labels = pointers[maxima_mask]
+            maxima_coords = sorted_voxel_coords[maxima_mask]
+            # get the unique maxima and the corresponding label for each 
+            unique_maxima, labels_flat = np.unique(maxima_labels, return_inverse=True)
+            # create an assignments array and label maxima
+            assignments = np.full(data.shape, -1, dtype=np.int64)
+            assignments[maxima_coords[:,0],maxima_coords[:,1],maxima_coords[:,2]]=labels_flat
+            # update maxima_num
+            maxima_num = len(unique_maxima)
 
-        # calculate approximate voxel assignments
-        assignments = get_weighted_voxel_assignments(
-            weight_array=weights_array.copy(), 
-            sorted_coords=sorted_voxel_coords.copy(), 
-            data=data,
-            )
-        self._basin_labels = assignments
-        charges /= reference_grid.shape.prod()
-        self._basin_charges = charges
-        self._basin_volumes = volumes
-    
-    def _run_bader_hybrid_weight(self):
-        """
-        Similar to the weight method, assigns basin weights to each voxel 
-        and assigns charge using the weight method. However, unlike the
-        original method, maxima are first reduced by interpolating the
-        values between maxima sharing a 26-neighbor border and checking
-        if there is a true minima between them.
-        """
-        reference_grid = self.reference_grid.copy()
-        # get the voronoi neighbors, their distances, and the area of the corresponding
-        # facets. This is used to calculate the volume flux from each voxel
-        neighbor_transforms, neighbor_dists, facet_areas, _ = reference_grid.voxel_voronoi_facets
-        logging.info("Sorting reference data")
-        data = reference_grid.total
-        shape = data.shape
-        # flatten data and get initial 1D and 3D voxel indices
-        flat_data = data.ravel()
-        flat_voxel_indices = np.arange(np.prod(shape))
-        voxel_indices = flat_voxel_indices.reshape(shape)
-        flat_voxel_coords =  np.indices(shape).reshape(3, -1).T
-        # sort data from high to low
-        sorted_data_indices = np.flip(np.argsort(flat_data, kind="stable"))
-        # create an array that maps original voxel indices to their range in terms
-        # of data
-        flat_sorted_voxel_indices = np.empty_like(flat_voxel_indices)
-        flat_sorted_voxel_indices[sorted_data_indices] = flat_voxel_indices
-        # Get a 3D grid representing this data and the corresponding 3D indices
-        sorted_voxel_indices = flat_sorted_voxel_indices.reshape(shape)
-        sorted_voxel_coords = flat_voxel_coords[sorted_data_indices]
-        # Get the flux of volume from each voxel to its neighbor
-        logging.info("Calculating voxel flux contributions")
-        flux_array, neigh_index_array, maxima_mask = get_neighbor_flux(
-            data=data, 
-            sorted_coords=sorted_voxel_coords.copy(), 
-            voxel_indices=sorted_voxel_indices, 
-            neighbor_transforms=neighbor_transforms, 
-            neighbor_dists=neighbor_dists, 
-            facet_areas=facet_areas)
-        # get the voxel coords of the maxima
-        maxima_vox_coords = sorted_voxel_coords[maxima_mask]
-
-        logging.info("Reducing connected maxima")
-        connected_maxima, maxima_frac_coords = get_connected_maxima(
-            maxima_vox_coords=maxima_vox_coords, 
-            flat_voxel_coords=flat_voxel_coords, 
-            voxel_indices=voxel_indices, 
-            grid=reference_grid,
-            )
-        # store the new basin maxima
+        else:
+            assignments=None
+        
+        # label maxima frac coords
+        maxima_frac_coords = reference_grid.get_frac_coords_from_vox(maxima_vox_coords)
         self._basin_maxima_frac = maxima_frac_coords
-        # connected maxima are in original unsorted indices. We convert these back
-        connected_maxima = [flat_sorted_voxel_indices[orig_indices] for orig_indices in connected_maxima]
-
-        # create a weight array to store values
-        weight_array = np.zeros((len(flux_array), len(connected_maxima)), dtype=np.float64)
-        for i, maxima_group in enumerate(connected_maxima):
-            weight_array[maxima_group, i] = 1.0
-
-        # Calculate the rest of the weights
-        logging.info("Calculating weights")
-        weights_array = get_hybrid_basin_weights(
-            flux_array=flux_array,
-            neigh_indices_array=neigh_index_array,
-            weight_array=weight_array,
-            )
-        self._basin_weights = weights_array.copy()
-        self._basin_weight_voxels = sorted_voxel_coords.copy()
-        self._basin_weight_voxels_1d = flat_sorted_voxel_indices.copy()
-        logging.info("Calculating basin charges and volumes")
-        charge_data = self.charge_grid.total
-        flat_charge_data = charge_data.ravel()
-        sorted_flat_charge_data = flat_charge_data[sorted_data_indices]
-        voxel_volume = reference_grid.voxel_volume
-        # get the charges and volumes
-        charges, volumes = get_basin_charge_volume_from_weights(
-            weight_array=weights_array.copy(),
-            flat_charge_array=sorted_flat_charge_data,
-            voxel_volume=voxel_volume,
-            )
-
-        # calculate approximate voxel assignments
-        assignments = get_weighted_voxel_assignments(
-            weight_array=weights_array.copy(), 
-            sorted_coords=sorted_voxel_coords.copy(), 
+        
+        # get assignments for voxels with one weight
+        assignments, unassigned_mask, charges, volumes = get_single_weight_voxels(
+            neigh_indices_array=neigh_indices_array,
+            sorted_voxel_coords=sorted_voxel_coords,
             data=data,
+            maxima_num=maxima_num,
+            sorted_flat_charge_data=sorted_flat_charge_data,
+            voxel_volume=voxel_volume,
+            assignments=assignments,
             )
-        self._basin_labels = assignments
+        # Now we have the assignments for the voxels that have exactly one weight.
+        # We want to get the weights for those that are split. To do this, we
+        # need an array with a N, maxima_num shape, where N is the number of
+        # unassigned voxels. Then we also need an array pointing each unassigned
+        # voxel to its point in this array
+        unass_to_vox_pointer = np.where(unassigned_mask)[0]
+        unassigned_num = len(unass_to_vox_pointer)
+        
+        # TODO: Check if the weights array ever actually needs to be the full maxima num wide
+        # get unassigned voxel index pointer
+        vox_to_unass_pointer = np.full(len(flat_charge_data), -1, dtype=np.int64)
+        vox_to_unass_pointer[unassigned_mask] = np.arange(unassigned_num)
+
+        assignments, charges, volumes = get_multi_weight_voxels(
+            flux_array=flux_array, 
+            neigh_indices_array=neigh_indices_array, 
+            assignments=assignments,
+            unass_to_vox_pointer=unass_to_vox_pointer,
+            vox_to_unass_pointer=vox_to_unass_pointer,
+            sorted_voxel_coords=sorted_voxel_coords,
+            charge_array=charges,
+            volume_array=volumes,
+            sorted_flat_charge_data=sorted_flat_charge_data,
+            voxel_volume=voxel_volume,
+            maxima_num=maxima_num,
+            )
+        
         charges /= reference_grid.shape.prod()
+        self._basin_labels = assignments
         self._basin_charges = charges
         self._basin_volumes = volumes
     
@@ -649,7 +604,10 @@ class Bader:
             basin_atoms[i] = assignment
             basin_atom_dists[i] = min_dist
             atom_labels[self.basin_labels==i] = assignment
-            atom_charges[assignment] += self.basin_charges[i]
+            try:
+                atom_charges[assignment] += self.basin_charges[i]
+            except:
+                breakpoint()
             atom_volumes[assignment] += self.basin_volumes[i]
             
         # update class variables
