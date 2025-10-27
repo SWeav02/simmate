@@ -191,58 +191,6 @@ def get_neighbor_flux(
     
     return flux_array, neigh_array, maxima_mask
 
-
-# @njit(fastmath=True, cache=True)
-# def get_basin_weights(
-#     flux_array: NDArray[np.float64], 
-#     neigh_indices_array: NDArray[np.int64], 
-#     # flat_charge_array: NDArray[np.float64],
-#     # voxel_volume: np.float64,
-#     maxima_num: types.int64
-# ):
-#     # get the length of our voxel array and create an empty array for storing
-#     # data as we collect it
-#     n_voxels = flux_array.shape[0]
-#     weight_array = np.zeros((n_voxels, maxima_num), dtype=np.float64)
-#     # Create arrays for storing charge and volume assignments so we don't have
-#     # to do a loop again later
-#     # charge_array = np.zeros(maxima_num, dtype=np.float64)
-#     # volume_array = np.zeros(maxima_num, dtype=np.float64)
-#     # create array for storing labels
-    
-#     # create counter for maxima
-#     maxima = 0
-#     # iterate over our voxels. We assume voxels are ordered from highest to lowest
-#     # data
-#     for i in range(n_voxels):
-#         neighbors = neigh_indices_array[i]
-#         # charge = flat_charge_array[i]
-#         # Our neighbor indices array is -1 where the neighbors are lower. Maxima
-#         # correspond to where this is true for all neighbors
-#         if np.all(neighbors<0):
-#             # Give this maxima a weight of 1
-#             weight_array[i, maxima] = 1.0
-#             # update our charge and volume arrays
-#             # charge_array[maxima] += charge
-#             # volume_array[maxima] += voxel_volume
-#             # note we have a maxima
-#             maxima += 1
-#             continue
-#         # Otherwise we are at either an interior or edge voxel.
-#         # Get a mask where there are neighbors in this row (those that are above -1)
-#         mask  = neigh_indices_array[i, :] >= 0
-#         # Get the relavent neighbors and flux flowing into them
-#         fluxes = flux_array[i, mask]
-#         # Get the sum of each current_flux*neighbor_flux for each basin and
-#         weight_row = fluxes @ weight_array[neighbors[mask]]
-#         # Update the charge and volume arrays
-#         # charge_array = charge_array + weight_row*charge
-#         # volume_array = volume_array + weight_row*voxel_volume
-#         # update the weight array
-#         weight_array[i] = weight_row
-
-#     return weight_array#, charge_array, volume_array
-
 @njit(fastmath=True, cache=True)
 def get_single_weight_voxels(
         neigh_indices_array: NDArray[np.int64], 

@@ -8,11 +8,10 @@ from simmate.apps.badelf.utilities import (
     get_steepest_pointers,
     get_edges,
     get_basin_charge_volume_from_label,
-    get_near_grid_assignments,
+    # get_near_grid_assignments,
     get_single_weight_voxels,
     get_multi_weight_voxels,
     get_neighbor_flux,
-    get_hybrid_basin_weights,
     )
 from itertools import product
 from numpy.typing import NDArray
@@ -20,7 +19,7 @@ from pathlib import Path
 import logging
 from tqdm import tqdm
 from typing import Literal
-import time
+# import time
 
 class Bader:
     """

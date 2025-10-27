@@ -188,33 +188,68 @@ class Grid(VolumetricData):
         The transformations, areas, and vertices of the voronoi surface
         between any points and its neighbors in the grid
         """
+        # get the neighboring voxels around the origin
         voxel_positions = np.array(list(itertools.product([-1,0,1], repeat=3)))
+        # convert to real space and create a scipy Voronoi object
         cart_positions = self.get_cart_coords_from_vox(voxel_positions)
         voronoi = Voronoi(cart_positions)
+        # Create lists to store information
         site_neighbors = []
         facet_vertices = []
         facet_areas = []
+        # Define a function to calculate facets areas in 3d space
+        def order_facet_vertices(vertices):
+            """
+            Orders coplanar 3D vertices of a polygon counterclockwise around their centroid.
+            """
+            # Step 1: Compute the normal of the plane using PCA
+            centroid = np.mean(vertices, axis=0)
+            centered = vertices - centroid
+            _, _, vh = np.linalg.svd(centered)
+            normal = vh[2]  # last singular vector is the normal
         
+            # Step 2: Create 2D basis vectors in the plane
+            u = vh[0]  # first direction in plane
+            v = vh[1]  # second direction in plane
+        
+            # Step 3: Project points to 2D coordinates in the plane
+            coords_2d = np.array([[np.dot(p - centroid, u), np.dot(p - centroid, v)] for p in vertices])
+        
+            # Step 4: Compute angles and sort
+            angles = np.arctan2(coords_2d[:, 1], coords_2d[:, 0])
+            sorted_indices = np.argsort(angles)
+        
+            return vertices[sorted_indices]
         def facet_area(vertices):
-            # You can use a 2D or 3D area formula for a polygon
-            # Here we assume the vertices are in a 2D plane for simplicity
-            # For 3D, a more complicated approach (e.g., convex hull or triangulation) is needed
+            """
+            Compute the area of a polygon in 3D space by triangulating it from the first vertex.
+            Assumes vertices lie on the same plane and are ordered.
+            """
+            if len(vertices) < 3:
+                return 0.0
+        
             p0 = np.array(vertices[0])
-            area = 0
-            for i in range(1, len(vertices)-1):
+            area = 0.0
+        
+            for i in range(1, len(vertices) - 1):
                 p1 = np.array(vertices[i])
-                p2 = np.array(vertices[i+1])
-                area += np.linalg.norm(np.cross(p1 - p0, p2 - p0)) / 2.0
+                p2 = np.array(vertices[i + 1])
+                # Triangle area from cross product
+                triangle_area = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0))
+                area += triangle_area
+        
             return area
+
         
         for i, neighbor_pair in enumerate(voronoi.ridge_points):
             if 13 in neighbor_pair:
                 neighbor = [i for i in neighbor_pair if i != 13][0]
                 vertex_indices = voronoi.ridge_vertices[i]
                 vertices = voronoi.vertices[vertex_indices]
-                area = facet_area(vertices)
+                ordered_vertices = order_facet_vertices(vertices)
+                area = facet_area(ordered_vertices)
                 site_neighbors.append(neighbor)
-                facet_vertices.append(vertices)
+                facet_vertices.append(ordered_vertices)
                 facet_areas.append(area)
         transforms = voxel_positions[np.array(site_neighbors)]
         cart_transforms = cart_positions[np.array(site_neighbors)]
